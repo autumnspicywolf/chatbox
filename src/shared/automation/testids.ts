@@ -72,6 +72,7 @@ export const TestId = {
     settingsTrigger: 'settings-trigger',
     sessionItem: 'session-item',
     sessionTitle: 'session-title',
+    sessionLanSyncOrigin: 'session-lan-sync-origin',
     sessionPin: 'session-pin',
     sessionArchive: 'session-archive',
     collapse: 'sidebar-collapse',

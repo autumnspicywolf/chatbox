@@ -76,6 +76,8 @@ const electronHandler: ElectronIPC = {
     }
   },
   onSkillsBuiltinUpdated: createListener('skills:builtin-updated'),
+  // 局域网同步：手机端转发过来的用户消息（第 20 轮）
+  onLanSyncForwardedMessage: createListener('lan-sync:forwarded-message'),
 
   // Auto-updater events
   onUpdaterChecking: createListener('updater:checking'),

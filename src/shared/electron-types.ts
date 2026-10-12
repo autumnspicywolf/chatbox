@@ -14,6 +14,8 @@ export interface ElectronIPC {
   onNavigate: (callback: (path: string) => void) => () => void
   // 内置 skill 后台同步完成（有更新）时由 main 推送，renderer 据此刷新 skill 列表与工具缓存
   onSkillsBuiltinUpdated: (callback: () => void) => () => void
+  // 局域网同步：手机端把「电脑端会话」里输入的消息转发回来，main 推送，renderer 据此真正发送（第 20 轮）
+  onLanSyncForwardedMessage: (callback: (message: { sessionId: string; text: string; at: number }) => void) => () => void
 
   // Auto-updater events
   onUpdaterChecking: (callback: () => void) => () => void

@@ -30,6 +30,8 @@ import { showSessionArchiveUndo } from '@/presentation/session/session-archive-n
 import { useAuthInfoStore } from '@/stores/authInfoStore'
 import { applyChatboxLicenseDefaultModelToSession } from '@/stores/defaultChatModel'
 import { lastUsedModelStore } from '@/stores/lastUsedModelStore'
+import { forwardLanSyncMessage, isLanSyncClientAvailable } from '@/stores/lan-sync-client'
+import { isLanSyncImportedSession } from '@/stores/lan-sync-imported'
 import * as scrollActions from '@/stores/scrollActions'
 import { switchCurrentSession } from '@/stores/session/crud'
 import { submitNewUserMessage } from '@/stores/session/messages'
@@ -177,11 +179,32 @@ function RouteComponent() {
 
   const onSubmit = useCallback(
     async ({ constructedMessage, needGenerating = true, onUserMessageReady }: InputBoxPayload) => {
-      messageListRef.current?.setIsNewMessage(autoScrollNewMessagesToTop)
-
       if (!currentSession) {
         return
       }
+
+      // 需求 2：电脑端同步过来的会话，不在手机上发送 —— 转发回电脑端由它真正发送。
+      // 原因：那类会话本来就诞生在电脑端，可能依赖电脑端的 MCP 等工具；而且本地生成的
+      // 回复会在随后的同步里被电脑端版本覆盖。电脑端处理完会把新包同步回来。
+      if (isLanSyncClientAvailable() && isLanSyncImportedSession(currentSession.id)) {
+        const text = (constructedMessage.contentParts || [])
+          .map((part) => (part.type === 'text' ? part.text : ''))
+          .join('\n')
+          .trim()
+        if (!text) {
+          return
+        }
+        try {
+          await forwardLanSyncMessage({ sessionId: currentSession.id, text })
+          onUserMessageReady?.()
+          addToast(t('Sent to computer. Its reply will sync back here.'))
+        } catch (error) {
+          addToast(error instanceof Error ? error.message : String(error))
+        }
+        return
+      }
+
+      messageListRef.current?.setIsNewMessage(autoScrollNewMessagesToTop)
       if (currentSessionWithDefaultModel && currentSessionWithDefaultModel !== currentSession) {
         await rendererApplication.sessions.updateSession(currentSession.id, {
           settings: currentSessionWithDefaultModel.settings,
@@ -201,7 +224,7 @@ function RouteComponent() {
         onUserMessageReady,
       })
     },
-    [autoScrollNewMessagesToTop, currentSession, currentSessionWithDefaultModel]
+    [autoScrollNewMessagesToTop, currentSession, currentSessionWithDefaultModel, t]
   )
 
   const onClickSessionSettings = useCallback(() => {

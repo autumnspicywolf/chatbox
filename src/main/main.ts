@@ -34,6 +34,7 @@ import { KNOWN_LOCAL_PARSER_ERROR_CODES } from '../shared/file-parse-errors'
 import { VIEW_IMAGE_MAX_READ_BYTES } from '../shared/tools/view-image'
 import { flushSentry, sentry } from './adapters/sentry'
 import { registerAgentPersonaHandlers } from './agent-persona/ipc-handlers'
+import { registerLanSyncHandlers } from './lan-sync/ipc-handlers'
 import * as analystic from './analystic-node'
 import { AppUpdater } from './app-updater'
 import * as autoLauncher from './autoLauncher'
@@ -1188,6 +1189,7 @@ registerSandboxHandlers()
 registerSkillsHandlers()
 registerOAuthHandlers()
 registerAgentPersonaHandlers()
+registerLanSyncHandlers()
 if (!IS_HARMONY_BUILD) {
   registerDesktopDirectRequestHandlers()
 }

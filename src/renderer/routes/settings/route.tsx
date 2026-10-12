@@ -9,6 +9,7 @@ import {
   IconChevronLeft,
   IconChevronRight,
   IconCircleDottedLetterM,
+  IconDevices,
   IconFileText,
   IconInfoCircle,
   IconKeyboard,
@@ -109,6 +110,11 @@ const ITEMS = [
           icon: <IconKeyboard className="w-full h-full" />,
         },
       ]),
+  {
+    key: 'lan-sync',
+    label: 'LAN Sync',
+    icon: <IconDevices className="w-full h-full" />,
+  },
   {
     key: 'general',
     label: 'General Settings',

@@ -3,7 +3,14 @@ import NiceModal from '@ebay/nice-modal-react'
 import { ActionIcon, Box, Flex, Input, Text } from '@mantine/core'
 import { TestId } from '@shared/automation/testids'
 import type { SessionMetaRecord } from '@shared/types'
-import { IconArchive, IconArrowsMoveVertical, IconLoader2, IconPinned, IconPinnedFilled } from '@tabler/icons-react'
+import {
+  IconArchive,
+  IconArrowsMoveVertical,
+  IconDeviceDesktop,
+  IconLoader2,
+  IconPinned,
+  IconPinnedFilled,
+} from '@tabler/icons-react'
 import clsx from 'clsx'
 import dayjs from 'dayjs'
 import { type MouseEvent, memo, type PointerEvent, useRef, useState } from 'react'
@@ -15,6 +22,7 @@ import { navigateToSettings } from '@/modals/settings-navigation'
 import platform from '@/platform'
 import { showSessionArchiveUndo } from '@/presentation/session/session-archive-notification'
 import { router } from '@/router'
+import { useLanSyncImportedSession } from '@/stores/lan-sync-imported'
 import { switchCurrentSession } from '@/stores/session/crud'
 import { useSessionActivity } from '@/stores/sessionActivityStore'
 import * as toastActions from '@/stores/toastActions'
@@ -84,6 +92,8 @@ function SessionItem(props: Props) {
   const [mobileMenuOpened, setMobileMenuOpened] = useState(false)
   const [longPressing, setLongPressing] = useState(false)
   const [renaming, setRenaming] = useState(false)
+  // 第 20 轮（需求 1）：这条会话是不是从电脑端同步过来的 —— 名字后面加一个电脑图标。
+  const importedFromComputer = useLanSyncImportedSession(session.id)
   const [draftName, setDraftName] = useState('')
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const longPressTriggeredRef = useRef(false)
@@ -343,6 +353,18 @@ function SessionItem(props: Props) {
         >
           {session.name}
         </Text>
+      )}
+
+      {!renaming && importedFromComputer && (
+        <Box
+          component="span"
+          data-testid={TestId.sidebar.sessionLanSyncOrigin}
+          title={t('Synced from computer')}
+          aria-label={t('Synced from computer')}
+          className="shrink-0 flex items-center text-chatbox-tint-tertiary"
+        >
+          <ScalableIcon icon={IconDeviceDesktop} size={14} />
+        </Box>
       )}
 
       {activity !== 'idle' && !renaming && (

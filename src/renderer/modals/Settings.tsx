@@ -27,6 +27,7 @@ import { RouteComponent as SettingsDocumentParserRouteComponent } from '@/routes
 import { RouteComponent as SettingsGeneralRouteComponent } from '@/routes/settings/general'
 import { RouteComponent as SettingsHotkeysRouteComponent } from '@/routes/settings/hotkeys'
 import { RouteComponent as SettingsIndexRouteComponent } from '@/routes/settings/index'
+import { RouteComponent as SettingsLanSyncRouteComponent } from '@/routes/settings/lan-sync'
 import { RouteComponent as SettingsMcpRouteComponent } from '@/routes/settings/mcp'
 import { RouteComponent as SettingsProviderProviderIdRouteComponent } from '@/routes/settings/provider/$providerId'
 import { RouteComponent as SettingsProviderChatboxAiRouteComponent } from '@/routes/settings/provider/chatbox-ai'
@@ -114,6 +115,12 @@ const SettingsHotkeysRoute = createRoute({
   getParentRoute: () => RootRoute,
 })
 
+const SettingsLanSyncRoute = createRoute({
+  component: SettingsLanSyncRouteComponent,
+  path: '/settings/lan-sync',
+  getParentRoute: () => RootRoute,
+})
+
 const SettingsDefaultModelsRoute = createRoute({
   component: SettingsDefaultModelsRouteComponent,
   path: '/settings/default-models',
@@ -163,6 +170,7 @@ const routeTree = RootRoute.addChildren([
   SettingsKnowledgeBaseRoute,
   SettingsDocumentParserRoute,
   SettingsHotkeysRoute,
+  SettingsLanSyncRoute,
   SettingsDefaultModelsRoute,
   SettingsProviderRouteRoute,
 ])

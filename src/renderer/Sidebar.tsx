@@ -33,6 +33,12 @@ import { navigateToSettings } from './modals/settings-navigation'
 import { trackingEvent } from './packages/event'
 import { getSidebarModalSx } from './sidebar-drawer'
 import icon from './static/icon.png'
+import {
+  isLanSyncAvailable,
+  pushLanSync,
+  startLanSyncAutoSync,
+  useLanSyncState,
+} from './stores/lan-sync'
 import { useLanguage } from './stores/settingsStore'
 import { useUIStore } from './stores/uiStore'
 import { installUpdate, useUpdateStore } from './stores/updateStore'
@@ -358,6 +364,7 @@ export default function Sidebar() {
                   p="xs"
                 />
               )}
+              <LanSyncNavLink />
               <AboutNavLink versionHook={versionHook} navigate={navigate} />
             </>
           )}
@@ -448,6 +455,89 @@ function AboutNavLink({
       variant="light"
       p="xs"
     />
+  )
+}
+
+/**
+ * 需求 1：桌面端「关于」上方的「手机已连接 / 等待手机连接」提示 + 一键同步按钮。
+ *
+ * 状态来自 stores/lan-sync 的轮询（提示 5s / 自动同步 30s）；点按钮走 pushLanSync()，
+ * 与设置页「一键推送」完全同一条路径（否则增量基准会错乱）。
+ * 只在桌面端渲染 —— web / 手机端自己就是客户端，没有这一行。
+ */
+function LanSyncNavLink() {
+  const { t } = useTranslation()
+  const available = isLanSyncAvailable()
+  const status = useLanSyncState((s) => s.status)
+  const syncing = useLanSyncState((s) => s.syncing)
+  const [flash, setFlash] = useState<{ ok: boolean; text: string } | null>(null)
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // 挂上轮询 / 脏标记 / 自动同步；Sidebar 卸载时收掉。
+  useEffect(() => startLanSyncAutoSync(), [])
+  useEffect(
+    () => () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current)
+    },
+    []
+  )
+
+  if (!available) return null
+
+  const running = status?.running === true
+  const connected = (status?.connectedClients ?? 0) > 0
+  const label = !running ? t('LAN Sync is off') : connected ? t('Phone connected') : t('Waiting for phone')
+  const dotColor = connected ? 'chatbox-success' : running ? 'chatbox-brand' : 'chatbox-tertiary'
+
+  const showFlash = (next: { ok: boolean; text: string }) => {
+    setFlash(next)
+    if (flashTimer.current) clearTimeout(flashTimer.current)
+    flashTimer.current = setTimeout(() => setFlash(null), 4000)
+  }
+
+  const handleSync = async () => {
+    if (!running) {
+      showFlash({ ok: false, text: t('LAN Sync is off') })
+      return
+    }
+    const outcome = await pushLanSync('incremental')
+    if (outcome.ok) {
+      showFlash({ ok: true, text: outcome.unchanged ? t('Nothing to sync') : t('Synced') })
+    } else {
+      showFlash({ ok: false, text: outcome.error || t('Sync failed') })
+    }
+  }
+
+  return (
+    <Box px="xs" pb={4}>
+      <Flex
+        align="center"
+        gap="xs"
+        px="sm"
+        py={6}
+        className="rounded-lg cursor-pointer"
+        onClick={() => navigateToSettings('/lan-sync')}
+        title={flash?.text || label}
+      >
+        <Box w={8} h={8} miw={8} bg={dotColor} style={{ borderRadius: '50%' }} />
+        <Text size="sm" c={connected ? 'chatbox-secondary' : 'chatbox-tertiary'} lineClamp={1} flex={1}>
+          {flash?.text || label}
+        </Text>
+        <Button
+          size="compact-xs"
+          variant="light"
+          color={flash && !flash.ok ? 'red' : undefined}
+          disabled={!running}
+          loading={syncing}
+          onClick={(event) => {
+            event.stopPropagation()
+            void handleSync()
+          }}
+        >
+          {t('Sync to phone')}
+        </Button>
+      </Flex>
+    </Box>
   )
 }
 

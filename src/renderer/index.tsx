@@ -16,6 +16,7 @@ import { router } from './router'
 import './static/globals.css'
 import './static/index.css'
 import { initLogAtom, migrationProcessAtom } from './stores/atoms/utilAtoms'
+import { initLanSyncClient } from './stores/lan-sync-client'
 import { CHATBOX_BUILD_PLATFORM, CHATBOX_BUILD_TARGET } from './variables'
 
 // 按需加载 polyfill
@@ -101,6 +102,9 @@ initializeRenderer()
     sessionStartupRecovery.promotePreviousAttempt()
     // 等待settings和onboarding初始化完成，避免闪屏
     await bootstrapRenderer(rendererApplication)
+    // 第 19 轮：局域网同步客户端连接提升到应用级 —— 只要页面开着就保持 SSE，与设置面板开不开无关。
+    // 桌面端内部会直接跳过（桌面端是服务端，不需要当客户端）。
+    initLanSyncClient()
     // Cleanup is intentionally not captured — listeners persist for the app lifetime
 
     // 初始化完成，可以开始渲染
