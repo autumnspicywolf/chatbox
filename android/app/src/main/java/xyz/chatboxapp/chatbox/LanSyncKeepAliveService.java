@@ -105,14 +105,6 @@ public class LanSyncKeepAliveService extends Service {
         }
 
         LanSyncNotifications.ensureChannels(this);
-        // 常驻通知可能被系统清掉（或首次未显示），这里刷新一次。
-        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        if (manager != null) {
-            manager.notify(
-                LanSyncNotifications.ID_KEEP_ALIVE,
-                LanSyncNotifications.buildKeepAlive(this, "已保持与电脑端的连接")
-            );
-        }
         // START_STICKY：被系统回收后尽量自动重建（重建时 onCreate 会重新 startForeground）。
         return START_STICKY;
     }

@@ -91,7 +91,14 @@ final class LanSyncNotifications {
         );
     }
 
-    /** 前台服务的常驻通知：无声、不可划掉。 */
+    /**
+     * 前台服务的常驻通知：无声、尽快显示。
+     *
+     * 注意：Android 14 起用户仍能**手动划掉**这条通知（官方行为变更，setOngoing(true)
+     * 只挡得住「清除全部」，挡不住单条滑动删除），且官方没有公开 API 能让应用强制不可划走。
+     * 划掉并不停服务，只是状态栏少一条 —— 保活照旧。
+     * setForegroundServiceBehavior(IMMEDIATE)：后台拉起服务时也立刻显示，不延迟。
+     */
     static Notification buildKeepAlive(Context context, String text) {
         NotificationCompat.Builder builder = new NotificationCompat.Builder(context, CHANNEL_KEEP_ALIVE)
             .setSmallIcon(R.drawable.ic_stat_chatbox)
@@ -101,7 +108,8 @@ final class LanSyncNotifications {
             .setOngoing(true)
             .setShowWhen(false)
             .setPriority(NotificationCompat.PRIORITY_MIN)
-            .setCategory(NotificationCompat.CATEGORY_SERVICE);
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE);
         return builder.build();
     }
 
