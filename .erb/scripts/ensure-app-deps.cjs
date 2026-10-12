@@ -21,6 +21,22 @@ exports.default = async function ensureAppDeps(context) {
   const appDir = path.join(__dirname, '..', '..', 'release', 'app')
   const nodeModulesDir = path.join(appDir, 'node_modules')
 
+  // Fast-repack escape hatch. This hook deletes release/app/node_modules and
+  // re-runs `npm ci`, which needs the registry/proxy to be reachable and costs
+  // tens of seconds per build. When the tree is already known-good, packaging
+  // can reuse it. Opt-in only, and the runtime-dep tree is still validated.
+  if (process.env.CHATBOX_SKIP_APP_DEPS === '1') {
+    if (!fs.existsSync(nodeModulesDir)) {
+      throw new Error(
+        '[ensure-app-deps] CHATBOX_SKIP_APP_DEPS=1 but release/app/node_modules does not exist. ' +
+          'Unset it (or run a full build) so dependencies can be installed.',
+      )
+    }
+    console.log('[ensure-app-deps] CHATBOX_SKIP_APP_DEPS=1 — reusing existing release/app/node_modules')
+    verifyInstalledRuntimeDeps(appDir)
+    return
+  }
+
   // Remove pnpm's incomplete hoisted node_modules if it exists
   if (fs.existsSync(nodeModulesDir)) {
     fs.rmSync(nodeModulesDir, { recursive: true, force: true })

@@ -143,6 +143,18 @@ export function getRendererDevServerConfig(env: {
 const inferredRelease = process.env.SENTRY_RELEASE || packageJson.version
 const inferredDist = process.env.SENTRY_DIST || undefined
 
+// Dependency-analysis reports are a debugging aid, not a build artifact. They add
+// a full bundle walk plus a ~10MB HTML write to every production build, and the
+// output is excluded from the package anyway. Opt in with CHATBOX_ANALYZE=1.
+const analyzeReportsEnabled = process.env.CHATBOX_ANALYZE === '1'
+
+function analyzeReports(filename: string, title: string) {
+  if (!analyzeReportsEnabled) {
+    return []
+  }
+  return [visualizer({ filename, open: false, title })]
+}
+
 process.env.SENTRY_RELEASE = inferredRelease
 if (inferredDist) {
   process.env.SENTRY_DIST = inferredDist
@@ -160,13 +172,7 @@ export default defineConfig(({ mode }) => {
     main: {
       plugins: [
         ...(isProduction
-          ? [
-              visualizer({
-                filename: 'release/app/dist/main/stats.html',
-                open: false,
-                title: 'Main Process Dependency Analysis',
-              }),
-            ]
+          ? analyzeReports('release/app/dist/main/stats.html', 'Main Process Dependency Analysis')
           : [externalizeDepsPlugin()]),
         process.env.SENTRY_AUTH_TOKEN
           ? sentryVitePlugin({
@@ -222,11 +228,7 @@ export default defineConfig(({ mode }) => {
     },
     preload: {
       plugins: [
-        visualizer({
-          filename: 'release/app/dist/preload/stats.html',
-          open: false,
-          title: 'Preload Process Dependency Analysis',
-        }),
+        ...analyzeReports('release/app/dist/preload/stats.html', 'Preload Process Dependency Analysis'),
       ],
       build: {
         outDir: isProduction ? 'release/app/dist/preload' : undefined,
@@ -264,11 +266,7 @@ export default defineConfig(({ mode }) => {
         isWeb ? injectBaseTag() : undefined,
         injectReleaseDate(),
         isWeb ? replacePlausibleDomain() : undefined,
-        visualizer({
-          filename: 'release/app/dist/renderer/stats.html',
-          open: false,
-          title: 'Renderer Process Dependency Analysis',
-        }),
+        ...analyzeReports('release/app/dist/renderer/stats.html', 'Renderer Process Dependency Analysis'),
         process.env.SENTRY_AUTH_TOKEN
           ? sentryVitePlugin({
               authToken: process.env.SENTRY_AUTH_TOKEN,

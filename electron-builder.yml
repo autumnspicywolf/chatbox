@@ -6,8 +6,11 @@ asarUnpack:
   - "**/node_modules/libsql/**"
 files:
   - "dist"
-  # - "!dist/**/*.map"
-  # - "!dist/**/stats.html"
+  # Source maps (dist/main/main.js.map ~34MB) and rollup-plugin-visualizer reports
+  # (~10MB) are never read at runtime. Excluding them removes ~44MB from app.asar,
+  # which shortens both the packaging copy step and every cold start.
+  - "!dist/**/*.map"
+  - "!dist/**/stats.html"
   - "node_modules"
   - "!node_modules/@types"
   - "!node_modules/undici-types"

@@ -1150,3 +1150,90 @@ describe('ZIP backup round trip', () => {
     expect(destination.blobs.size).toBe(0)
   })
 })
+
+describe('archived sessions stay out of the backup', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  const exportOnly = async (source: MemoryStorage, sourceMeta: MemoryMetaStorage) => {
+    const chunks: Uint8Array[] = []
+    const exported = await exportBackupArchive({
+      exportItems: ['conversations'],
+      includeKeys: false,
+      exportedAt: new Date('2026-07-14T00:00:00.000Z'),
+      storage: source,
+      metaStorage: sourceMeta,
+      application: { version: '1.22.0', platform: 'test' },
+      writeArchive: async (dataCallback) => {
+        for await (const chunk of dataCallback()) chunks.push(chunk)
+        return { boundedMemory: true }
+      },
+    })
+    return { exported, chunks }
+  }
+
+  const restore = async (chunks: Uint8Array[]) => {
+    const destination = new MemoryStorage()
+    const destinationMeta = new MemoryMetaStorage()
+    const archive = combine(chunks)
+    const result = await importBackupArchive(
+      new File([Uint8Array.from(archive).buffer], 'backup.zip', { type: 'application/zip' }),
+      { storage: destination, metaStorage: destinationMeta }
+    )
+    return { result, destination, destinationMeta }
+  }
+
+  it('drops 归档会话 but keeps recovery-archived copies', async () => {
+    const source = new MemoryStorage()
+    const sourceMeta = new MemoryMetaStorage()
+
+    const keep = createSession('keep')
+    const bodyArchived = createSession('body-archived')
+    bodyArchived.archivedAt = 1
+    const metaArchived = createSession('meta-archived')
+    metaArchived.archivedAt = 2
+    const recovery = createSession('recovery')
+    recovery.archivedAt = 3
+
+    for (const session of [keep, bodyArchived, metaArchived, recovery]) {
+      source.values.set(backupSessionStorageKey(session.id), session)
+    }
+    sourceMeta.records.set('keep', createMeta(keep, 1))
+    // 元数据漏标记归档 → 靠会话正文里的 archivedAt 兜
+    sourceMeta.records.set('body-archived', createMeta(bodyArchived, 2))
+    sourceMeta.records.set('meta-archived', { ...createMeta(metaArchived, 3), hidden: true, archivedAt: 2 })
+    // 数据修复留下的副本：不是用户主动归档，必须保留
+    sourceMeta.records.set('recovery', {
+      ...createMeta(recovery, 4),
+      hidden: true,
+      archivedAt: 3,
+      recoveryArchived: true,
+    })
+
+    const { exported, chunks } = await exportOnly(source, sourceMeta)
+    expect(exported.manifest.sessions.map((session) => session.id).sort()).toEqual(['keep', 'recovery'])
+
+    const { result, destination } = await restore(chunks)
+    expect(result.restoredSessionCount).toBe(2)
+    expect(destination.values.has(backupSessionStorageKey('keep'))).toBe(true)
+    expect(destination.values.has(backupSessionStorageKey('recovery'))).toBe(true)
+    expect(destination.values.has(backupSessionStorageKey('body-archived'))).toBe(false)
+    expect(destination.values.has(backupSessionStorageKey('meta-archived'))).toBe(false)
+  })
+
+  it('yields an empty backup when every session is archived', async () => {
+    const source = new MemoryStorage()
+    const sourceMeta = new MemoryMetaStorage()
+    for (const [index, id] of ['only-one', 'only-two'].entries()) {
+      const session = createSession(id)
+      session.archivedAt = index + 1
+      source.values.set(backupSessionStorageKey(id), session)
+      sourceMeta.records.set(id, { ...createMeta(session, index + 1), hidden: true, archivedAt: index + 1 })
+    }
+
+    const { exported, chunks } = await exportOnly(source, sourceMeta)
+    expect(exported.manifest.sessions).toHaveLength(0)
+
+    const { result } = await restore(chunks)
+    expect(result.restoredSessionCount).toBe(0)
+  })
+})
