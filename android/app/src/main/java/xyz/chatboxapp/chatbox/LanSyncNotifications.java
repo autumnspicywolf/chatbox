@@ -15,18 +15,22 @@ import androidx.core.app.NotificationCompat;
 /**
  * 第 23 轮：局域网同步的原生通知渠道 + 通知构造。
  *
- * 两条渠道：
+ * 三条渠道：
  * - {@link #CHANNEL_KEEP_ALIVE}：前台服务的常驻通知，最低优先级、无声无振动，
  *   只是一条「同步在后台保持连接」的可见凭据（Android 要求前台服务必须有通知）。
  * - {@link #CHANNEL_TASK}：同步过来的「工作模式任务完成」提醒，走系统提示音 + 振动模式。
+ *   **只有任务真正完成才走这条渠道**。
+ * - {@link #CHANNEL_NEW_DATA}：第 28 轮新增的「有新消息待同步」提示。同步本身就是同步，
+ *   不该跟任务完成一样响铃震动，所以单开一条低优先级、无声无振动的渠道。
  *
  * 注意：Android 8.0+ 的通知渠道属性一旦创建就**不可修改**，想换声音/振动/重要级
- * 必须换新的 channel id（所以这两个 id 不要复用成别的语义）。
+ * 必须换新的 channel id（所以这几个 id 不要复用成别的语义）。
  */
 final class LanSyncNotifications {
 
     static final String CHANNEL_KEEP_ALIVE = "lan_sync_keep_alive";
     static final String CHANNEL_TASK = "lan_sync_task_done";
+    static final String CHANNEL_NEW_DATA = "lan_sync_new_data";
 
     static final int ID_KEEP_ALIVE = 2301;
     static final int ID_TASK = 2302;
@@ -73,6 +77,21 @@ final class LanSyncNotifications {
                     .setUsage(AudioAttributes.USAGE_NOTIFICATION)
                     .build()
             );
+            manager.createNotificationChannel(channel);
+        }
+
+        // 第 28 轮：「有新消息待同步」用它 —— 重要级 LOW 才能在状态栏看见，
+        // 但关掉声音与振动：普通同步只是同步，不打扰用户；震动只留给任务完成。
+        if (manager.getNotificationChannel(CHANNEL_NEW_DATA) == null) {
+            NotificationChannel channel = new NotificationChannel(
+                CHANNEL_NEW_DATA,
+                "同步新消息",
+                NotificationManager.IMPORTANCE_LOW
+            );
+            channel.setDescription("电脑端有新的会话内容，手机后台时提示一下；不会响铃或振动");
+            channel.setShowBadge(true);
+            channel.setSound(null, null);
+            channel.enableVibration(false);
             manager.createNotificationChannel(channel);
         }
     }
@@ -127,6 +146,26 @@ final class LanSyncNotifications {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             builder.setDefaults(NotificationCompat.DEFAULT_SOUND | NotificationCompat.DEFAULT_VIBRATE);
         }
+        return builder.build();
+    }
+
+    /**
+     * 第 28 轮：「有新消息待同步」提醒：静默（无声、无振动），只占状态栏一行。
+     *
+     * 与 {@link #buildTask} 分开是为了让「普通同步」和「任务完成」在系统层面就不可混淆：
+     * 任务完成会响铃 + 振动，普通同步不会。
+     */
+    static Notification buildNewData(Context context, String title, String body) {
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(context, CHANNEL_NEW_DATA)
+            .setSmallIcon(R.drawable.ic_stat_chatbox)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
+            .setContentIntent(openAppPendingIntent(context))
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setSilent(true)
+            .setCategory(NotificationCompat.CATEGORY_STATUS);
         return builder.build();
     }
 }

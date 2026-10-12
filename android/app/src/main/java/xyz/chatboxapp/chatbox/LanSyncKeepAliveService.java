@@ -56,7 +56,10 @@ public class LanSyncKeepAliveService extends Service {
     private static final long WATCH_INTERVAL_MS = 20_000L;
     private static final int WATCH_CONNECT_TIMEOUT_MS = 5_000;
     private static final int WATCH_READ_TIMEOUT_MS = 5_000;
-    /** 「有新消息」通知的 id：与 JS 侧的任务完成通知（LanSyncNotifications.ID_TASK）分开，互不干扰。 */
+    /**
+     * 「有新消息」通知的 id：与 JS 侧的任务完成通知（LanSyncNotifications.ID_TASK）分开，互不干扰。
+     * 第 28 轮：它走静默渠道（lan_sync_new_data），不响铃不振动 —— 只有任务完成才震动。
+     */
     private static final int ID_WATCH = 2303;
 
     private ScheduledExecutorService watcher;
@@ -259,7 +262,7 @@ public class LanSyncKeepAliveService extends Service {
         LanSyncNotifications.ensureChannels(this);
         manager.notify(
             ID_WATCH,
-            LanSyncNotifications.buildTask(this, "有新消息待同步", "电脑端有新的内容，点开 Chatbox 查看")
+            LanSyncNotifications.buildNewData(this, "有新消息待同步", "电脑端有新的内容，点开 Chatbox 查看")
         );
         // 先记下批次号再等 JS 回前台：同一条只提醒一次，避免每 20 秒重复弹。
         prefs(this).edit().putString(KEY_LAST_BATCH, batchId).apply();
