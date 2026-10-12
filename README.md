@@ -54,6 +54,66 @@ This is the repository for the Chatbox Community Edition, open-sourced under the
 
 We regularly sync code from the pro repo to this repo, and vice versa.
 
+---
+
+## 本仓库定制说明 / Fork Customizations
+
+> 本仓库是上游 [chatboxai/chatbox](https://github.com/chatboxai/chatbox) 的**个人自用 fork**（基线 v1.23.5，分支 `main`），加入了若干本地增强：**局域网同步**、**任务完成提示音**，以及一套 **Capacitor 自签名 Android 打包**链路。以下均为本 fork 相对上游的新增，与官方发行版无关。
+
+### 1. 局域网同步（LAN Sync）
+
+让**电脑端当服务端**、**手机端（或任意浏览器）当客户端**：把电脑上的会话同步到手机查看，也能在手机上把消息转发回电脑发送。
+
+- **入口**：设置 → `LAN Sync`（左侧导航独立项，桌面端 / 手机端都有）。
+- **默认端口**：`17878`（刻意避开 1212 vite dev server 与 8899 本地镜像代理）。
+- **架构**：电脑端主进程起一个 HTTP + SSE 服务（监听 `0.0.0.0:17878`），主进程只当「哑管道」——起服务 + 缓存最近一次同步包，真正的会话数据仍由 renderer 的存储提供。
+- **配对**：首次连接需在手机上填 `http://<电脑局域网IP>:17878` + **6 位配对码**（电脑端设置页显示，可「重新生成配对码」解除配对 / 换手机）。令牌存 localStorage，电脑重启后手机能自动重连。
+- **推送方向**：
+  - 电脑端把增量 / 全量包推给手机，手机收到后**原样落地**（包里就是 store 的键值对）。
+  - 手机离线期间电脑端推的包会缓存，手机下次上线自动**补拉**一次补齐。
+  - 电脑端侧边栏「关于」上方显示 **「手机已连接 / 等待手机连接」** + **「同步到手机」**按钮；服务在跑且有改动时每 30s 自动增量推送。
+- **反向转发**：从电脑同步来的会话，在手机上发消息不会本地生成，而是**转发回电脑端**由它真正发送（这类会话可能依赖电脑端 MCP 等工具），电脑端跑完再把新包同步回来 —— 回来源的会话在列表里带一个 🖥 电脑图标。
+- **相关代码**：`src/main/lan-sync/`（服务端）、`src/shared/lan-sync/protocol.ts`（协议）、`src/renderer/stores/lan-sync*.ts`（客户端 / 自动同步 / 来源标记）、`src/renderer/components/settings/lan-sync/`、`src/renderer/packages/lan-sync/`、`src/__tests__/lan-sync-server.test.ts`。
+
+### 2. 任务完成提示音
+
+- 工作模式（Work Mode）任务完成时，用 Web Audio **现场合成**一段「叮—咚」两音提示（不依赖任何音频文件，桌面端与手机端同一套代码）。
+- **桌面端**：本地生成完成时响一次。
+- **手机端**：局域网同步把「电脑端刚完成」的任务带回手机时响一次。
+- **开关 & 时长**：设置 → 聊天 → 「任务完成时播放提示音」（默认开）+ 时长滑块（1–10 秒，默认 3 秒；每秒响一次，3 秒即连响三声）。
+- **相关代码**：`src/renderer/stores/task-complete-sound.ts`；设置项 `soundOnTaskComplete` / `soundOnTaskCompleteDuration`（`packages/chatbox-core`）。
+
+### 3. Android 自签名 APK（Capacitor）
+
+本仓库自带用 Capacitor 生成的 `android/` 原生工程，可直接出**自签名（debug）APK** 自己安装使用（不碰官方签名 / 不上架）。
+
+```powershell
+# Windows 环境变量（按本机实际路径改）
+$env:JAVA_HOME='C:\Users\<你>\.jdks\jdk-21'      # 需要 JDK 21
+$env:ANDROID_HOME='C:\Android\sdk'; $env:ANDROID_SDK_ROOT='C:\Android\sdk'
+
+# 1) 把 web 资源同步进 android/ 原生工程（= build:renderer + cap sync android）
+pnpm run mobile:sync:android
+
+# 2) 编译 debug 包
+cd android
+.\gradlew.bat assembleDebug --console=plain
+# 产物：android\app\build\outputs\apk\debug\app-debug.apk
+```
+
+- 包名 `xyz.chatboxapp.chatbox`，minSdk 23，targetSdk / compileSdk 35。
+- 相对上游，Android 侧做了两处适配：
+  1. **edge-to-edge 遮挡**（Android 15 / targetSdk 35 强制全屏边到边，导致返回按钮被状态栏压住）→ `capacitor.config.ts` 加 `adjustMarginsForEdgeToEdge: 'auto'`，并给启动主题补背景色（`android/app/src/main/res/values/colors.xml`、`values-night/colors.xml`）。
+  2. **局域网同步报 `Failed to fetch`**（两层拦截）→ ① APK 内页面 origin 是 `https://localhost`（Capacitor 默认 `androidScheme=https`），而电脑端同步服务是 `http://192.168.x.x:17878`，属**混合内容**被 WebView 拦 → `capacitor.config.ts` 加 **`allowMixedContent: true`**；② targetSdk 35 默认禁**明文流量** → `AndroidManifest.xml` 加 **`android:usesCleartextTraffic="true"`**。
+- **版本号**：改 `android/app/build.gradle` 的 `versionCode` / `versionName`（当前 `3` / `"1.2"`）。**递增 versionCode 即可覆盖安装、无需卸载**；卸载会清空 app 本地数据（OPFS）。
+- 注意：`android/app/src/main/assets/` 由 `cap sync` 自动生成，改完前端要重新 sync 再编译。
+
+### 4. Windows 桌面端打包（可选）
+
+仓库根目录的 `_build_win.cmd` 是本地打包辅助脚本（走 npmmirror 镜像 + 本地代理，产物 `release\build\Chatbox-1.23.5-Setup.exe`）。日常用上游的 `pnpm run package` 即可，这只是把代理 / 镜像 / rcedit 坑一次性固化下来的便捷脚本。
+
+---
+
 ## Download
 
 ### Desktop
