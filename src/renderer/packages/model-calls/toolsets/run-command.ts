@@ -31,6 +31,8 @@ interface RunCommandContext {
 
 interface RunCommandInput {
   command: string
+  /** 第 29 轮：模型给的 ≤20 字中文说明，UI 用它替代「运行命令」标签。 */
+  description?: string
   workdir?: string
   shell?: RunCommandShell
   timeout?: number
@@ -154,6 +156,7 @@ export function buildRunCommandTool(context: RunCommandContext): { tool: ToolSet
   const description = `
 ## Command Execution
 Use \`run_command\` for project commands, shell commands, and Node.js scripts. The current platform shell is ${shell}.
+- Always pass a description field: a 10-20 character Chinese phrase saying what the command does, with the key file or target in it (for example 查看 main.log, 运行绿色包). It is shown to the user in place of the tool name so a wrong command is easy to spot and stop early.
 - Commands use the selected workdir as cwd. All user-granted workdirs remain writable in the sandbox.
 - On macOS/Linux, commands run in the file sandbox first. A failed call records a one-time retry reference inside the harness without exposing it to the model.
 - Request full host access only after a real failed sandbox call, by retrying the exact command/workdir/shell with \`sandbox_permissions\` and \`justification\`.
@@ -175,6 +178,11 @@ Use \`run_command\` for project commands, shell commands, and Node.js scripts. T
       type: 'object',
       properties: {
         command: { type: 'string', description: `The ${shell} command to execute.` },
+        description: {
+          type: 'string',
+          description:
+            'A short Chinese label (10-20 characters) saying what this command actually does, with the key file or target in it — e.g. "查看 main.log", "运行绿色包". It replaces the tool name in the UI so a wrong command is easy to spot and stop early. Always provide it.',
+        },
         workdir: {
           type: 'string',
           description:

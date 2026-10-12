@@ -769,6 +769,7 @@ function buildUserExecTool(options: BuildToolsOptions): ToolSet[string] {
       "Execute a command in the user's real environment (not sandbox). " +
       "Use when the task requires the user's host environment, including when a loaded skill instructs you to run a host command; it is not limited to skill-driven tasks. " +
       'Prefer code_execution (sandbox) for work that does not need the host environment. ' +
+      'Always include a short Chinese description (10-20 characters) of what the command does. ' +
       'Runs PowerShell on Windows and Bash on macOS/Linux with full system access. ' +
       (agentFullAccess
         ? 'Full Access is enabled, so commands run without per-command approval.'
@@ -781,6 +782,11 @@ function buildUserExecTool(options: BuildToolsOptions): ToolSet[string] {
         command: {
           type: 'string',
           description: 'PowerShell command on Windows; Bash command on macOS/Linux',
+        },
+        description: {
+          type: 'string',
+          description:
+            'A short Chinese label (10-20 characters) saying what this command actually does, with the key file or target in it — e.g. "查看 main.log", "运行绿色包". It replaces the tool name in the UI so a wrong command is easy to spot and stop early. Always provide it.',
         },
       },
       required: ['command'],

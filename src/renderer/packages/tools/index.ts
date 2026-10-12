@@ -39,8 +39,23 @@ function getChatboxCliToolName(input: unknown): string {
   return t('Chatbox')
 }
 
+function readRunCommandDescription(input: unknown): string | undefined {
+  if (!input || typeof input !== 'object') return undefined
+  const value = (input as Record<string, unknown>).description
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed || undefined
+}
+
 export function getToolName(toolName: string, input?: unknown): string {
   if (toolName === 'chatbox_cli') return getChatboxCliToolName(input)
+  // 第 29 轮：运行命令改为优先显示模型给的 description（≤20 字，说明这条命令在干什么），
+  // 让用户一眼看出任务有没有跑偏、及时中止；没给就回退到工具名。
+  if (toolName === 'run_command' || toolName === 'user_exec') {
+    const description = readRunCommandDescription(input)
+    if (description) return description
+    return t('Run Command')
+  }
   // Use translation keys that i18next cli can detect
   const toolNames: Record<string, string> = {
     query_knowledge_base: t('Query Knowledge Base'),

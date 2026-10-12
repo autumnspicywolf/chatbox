@@ -10,6 +10,17 @@ describe('getToolName', () => {
     expect(getToolName('user_exec')).toBe('Run Command')
   })
 
+  it('prefers the model-provided description for run_command / user_exec', () => {
+    expect(getToolName('run_command', { command: 'type main.log', description: '查看 main.log' })).toBe('查看 main.log')
+    expect(getToolName('user_exec', { description: '运行绿色包' })).toBe('运行绿色包')
+  })
+
+  it('falls back to the tool name when the command description is missing or blank', () => {
+    expect(getToolName('run_command', { command: 'type main.log' })).toBe('Run Command')
+    expect(getToolName('run_command', { command: 'type main.log', description: '   ' })).toBe('Run Command')
+    expect(getToolName('run_command', { command: 'type main.log', description: 42 })).toBe('Run Command')
+  })
+
   it.each([
     [{ argv: ['version'] }, 'Chatbox Version'],
     [{ argv: ['account', 'status'] }, 'Account Status'],
