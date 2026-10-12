@@ -30,8 +30,17 @@ import * as toastActions from '@/stores/toastActions'
 
 /** 「手机已连接」提示的刷新间隔。 */
 export const LAN_SYNC_STATUS_POLL_MS = 5_000
-/** 自动推送的检查间隔（用户拍板 30s）。 */
-export const LAN_SYNC_AUTO_SYNC_MS = 30_000
+/**
+ * 自动推送的检查间隔。
+ *
+ * 第 28 轮（用户拍板）：30s → 3s。口径是「不纠结任务链有没有跑完，每 3 秒检查一次、
+ * 有脏标记就同步」，所以原先挂在「回复生成完成」回调上的即时推送被撤掉了 —— 3s 的
+ * tick 本身就是那个即时性来源，多留一条通路只会让推送时机更难解释。
+ *
+ * 注意这只是「检查」：服务没跑 / 没有脏标记 / 正在推送都会直接跳过（见 autoSyncTick），
+ * 所以空转时一秒钟也只做三次布尔判断，不会反复 build 同步包。
+ */
+export const LAN_SYNC_AUTO_SYNC_MS = 3_000
 
 interface LanSyncAutoState {
   /** 主进程服务状态；null = 还没问到（一般是主进程没起或没启服务）。 */

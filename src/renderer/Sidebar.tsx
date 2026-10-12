@@ -469,7 +469,7 @@ const LAN_SYNC_RING_LABEL_STYLE = { fontSize: 10, fontWeight: 700, lineHeight: 1
 /**
  * 「手机已连接」左侧的自动同步倒计时圈（第 24 轮）。
  *
- * - 按 LAN_SYNC_AUTO_SYNC_MS（30s）转满一圈，圆心显示剩余秒数；转满即触发自动同步。
+ * - 按 LAN_SYNC_AUTO_SYNC_MS（第 28 轮起为 3s）转满一圈，圆心显示剩余秒数；转满即触发自动同步。
  * - 有改动待推送（pending）或正在推送（syncing）时整体换成警示色 —— 一眼看出「还有东西没推上去」。
  * - 自己每 200ms 重绘一次；单独成组件，Sidebar 其余部分不受牵连。
  */
@@ -543,7 +543,7 @@ function LanSyncCountdownRing({
 /**
  * 需求 1：桌面端「关于」上方的「手机已连接 / 等待手机连接」提示 + 一键同步按钮。
  *
- * 状态来自 stores/lan-sync 的轮询（提示 5s / 自动同步 30s）；点按钮走 pushLanSync()，
+ * 状态来自 stores/lan-sync 的轮询（提示 5s / 自动同步 3s）；点按钮走 pushLanSync()，
  * 与设置页「一键推送」完全同一条路径（否则增量基准会错乱）。
  * 只在桌面端渲染 —— web / 手机端自己就是客户端，没有这一行。
  */
