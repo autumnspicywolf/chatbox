@@ -199,3 +199,16 @@ tmp_*.*
 
 # Local pnpm store accidentally created by pnpm install in worktrees
 .pnpm-store/
+
+# ---- fork: 本地打包 / 调试脚手架（上面的上游规则未改动）----
+# 均为本 fork 打 Android 包时的临时产物，不入库。
+# 注：android/ 原生工程已入库（不再忽略，见 README 的 Capacitor 打包链路）
+/_mirror/
+/_mirror-proxy.mjs
+/_probe_*.cjs
+/_probe_out.txt
+/_build_win.cmd
+/_build_win_dir.cmd
+/_run*.cmd
+/_fix_asar_integrity.mjs
+/custom_win_sign.js

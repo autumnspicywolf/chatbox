@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      App 窗口背景色。
+      Android 15+（本工程 targetSdk 35）强制 edge-to-edge，页面会顶到状态栏下面；
+      我们在 capacitor.config.ts 里开启了 android.adjustMarginsForEdgeToEdge = 'auto'，
+      Capacitor 会给 WebView 加上系统栏边距，系统栏那一条就露出窗口背景色。
+      这里让它与 Chatbox 浅色主题的主背景一致，避免出现突兀的黑条/白条。
+    -->
+    <color name="appWindowBackground">#FFFFFFFF</color>
+</resources>
