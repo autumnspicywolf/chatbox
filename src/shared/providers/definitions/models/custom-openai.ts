@@ -1,5 +1,5 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
-import { extractReasoningMiddleware, wrapLanguageModel } from 'ai'
+import { extractReasoningMiddleware, type JSONValue, wrapLanguageModel } from 'ai'
 import AbstractAISDKModel from '../../../models/abstract-ai-sdk'
 import { fetchRemoteModels, getOpenAICompatibleProviderOptionsKey } from '../../../models/openai-compatible'
 import type { CallChatCompletionOptions } from '../../../models/types'
@@ -41,15 +41,31 @@ export default class CustomOpenAI extends AbstractAISDKModel {
       this.options.model.modelId,
       options.providerOptions
     )
+    // A custom OpenAI provider speaks the raw OpenAI-compatible wire protocol, which has no
+    // dedicated DeepSeek namespace. Forward the persisted DeepSeek thinking toggle (and its
+    // effort, when the model exposes one) as verbatim body fields so a session configured with
+    // `{ thinking: { type: 'disabled' } }` reaches the upstream endpoint instead of being
+    // dropped here — the same shape the DeepSeek vision transport emits in deepseek.ts.
+    // `@ai-sdk/openai-compatible` passes unknown keys through untouched.
+    const deepseekOptions = options.providerOptions?.deepseek
+    const forwardedOptions: Record<string, JSONValue> | undefined =
+      deepseekOptions?.thinking?.type !== undefined || deepseekOptions?.reasoningEffort !== undefined
+        ? {
+            ...(openAICompatibleOptions ?? {}),
+            ...(deepseekOptions.thinking?.type ? { thinking: { type: deepseekOptions.thinking.type } } : {}),
+            ...(deepseekOptions.reasoningEffort ? { reasoningEffort: deepseekOptions.reasoningEffort } : {}),
+          }
+        : openAICompatibleOptions
+
     return {
       temperature: this.options.temperature,
       topP: this.options.topP,
       maxOutputTokens: this.options.maxOutputTokens,
       stream: this.options.stream,
-      providerOptions: openAICompatibleOptions
+      providerOptions: forwardedOptions
         ? {
-            openaiCompatible: openAICompatibleOptions,
-            [getOpenAICompatibleProviderOptionsKey(this.name)]: openAICompatibleOptions,
+            openaiCompatible: forwardedOptions,
+            [getOpenAICompatibleProviderOptionsKey(this.name)]: forwardedOptions,
           }
         : undefined,
     }

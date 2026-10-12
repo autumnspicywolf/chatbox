@@ -1,3 +1,4 @@
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import type { LanguageModelV3CallOptions } from '@ai-sdk/provider'
 import type { CallChatCompletionOptions } from '@shared/models/types'
 import type { ProviderModelInfo } from '@shared/types'
@@ -534,6 +535,119 @@ describe('reasoning request options', () => {
       openaiCompatible: { reasoningEffort: 'high' },
       'Custom OpenAI': { reasoningEffort: 'high' },
     })
+  })
+
+  it('forwards the DeepSeek thinking toggle for custom OpenAI providers', () => {
+    const customOpenAI = new CustomOpenAI(
+      {
+        apiKey: 'test-key',
+        apiHost: 'https://example.com/v1',
+        apiPath: '/chat/completions',
+        model: {
+          modelId: 'deepseek-v4-flash',
+          type: 'chat',
+          apiStyle: 'openai',
+          providerId: 'custom-provider-test',
+        },
+      },
+      createDependencies()
+    )
+
+    const settings = (customOpenAI as unknown as ResolveCallSettingsHarness).resolveCallSettings({
+      providerOptions: {
+        deepseek: { thinking: { type: 'disabled' } },
+      },
+    })
+
+    expect(settings.providerOptions).toEqual({
+      openaiCompatible: { thinking: { type: 'disabled' } },
+      'Custom OpenAI': { thinking: { type: 'disabled' } },
+    })
+  })
+
+  it('forwards the DeepSeek thinking toggle and effort together for custom OpenAI providers', () => {
+    const customOpenAI = new CustomOpenAI(
+      {
+        apiKey: 'test-key',
+        apiHost: 'https://example.com/v1',
+        apiPath: '/chat/completions',
+        model: {
+          modelId: 'deepseek-v4-flash',
+          type: 'chat',
+          apiStyle: 'openai',
+          providerId: 'custom-provider-test',
+        },
+      },
+      createDependencies()
+    )
+
+    const settings = (customOpenAI as unknown as ResolveCallSettingsHarness).resolveCallSettings({
+      providerOptions: {
+        deepseek: { thinking: { type: 'enabled' }, reasoningEffort: 'high' },
+      },
+    })
+
+    expect(settings.providerOptions).toEqual({
+      openaiCompatible: { thinking: { type: 'enabled' }, reasoningEffort: 'high' },
+      'Custom OpenAI': { thinking: { type: 'enabled' }, reasoningEffort: 'high' },
+    })
+  })
+
+  it('serializes the DeepSeek thinking toggle into the custom OpenAI-compatible request body', async () => {
+    const customOpenAI = new CustomOpenAI(
+      {
+        apiKey: 'test-key',
+        apiHost: 'https://example.com/v1',
+        apiPath: '/chat/completions',
+        model: {
+          modelId: 'deepseek-v4-flash',
+          type: 'chat',
+          apiStyle: 'openai',
+          providerId: 'custom-provider-test',
+        },
+      },
+      createDependencies()
+    )
+
+    const settings = (customOpenAI as unknown as ResolveCallSettingsHarness).resolveCallSettings({
+      providerOptions: {
+        deepseek: { thinking: { type: 'disabled' } },
+      },
+    })
+
+    // Replay the resolved options through the real OpenAI-compatible transport: only the
+    // provider-name namespace is spread verbatim into the body (the `openaiCompatible`
+    // namespace is schema-parsed and drops unknown keys), so this is the channel that has
+    // to carry `thinking`.
+    let requestBody: Record<string, unknown> | undefined
+    const captureFetch: typeof globalThis.fetch = (_input, init) => {
+      requestBody = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            id: 'chatcmpl-test',
+            object: 'chat.completion',
+            created: 0,
+            model: 'deepseek-v4-flash',
+            choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+      )
+    }
+    const provider = createOpenAICompatible({
+      name: 'Custom OpenAI',
+      apiKey: 'test-key',
+      baseURL: 'https://example.com/v1',
+      fetch: captureFetch,
+    })
+
+    await provider.languageModel('deepseek-v4-flash').doGenerate({
+      prompt: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+      providerOptions: settings.providerOptions as LanguageModelV3CallOptions['providerOptions'],
+    })
+
+    expect(requestBody?.thinking).toEqual({ type: 'disabled' })
   })
 
   it('leaves reasoning provider options untouched when the provider id is unknown', () => {
