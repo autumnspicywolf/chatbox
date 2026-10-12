@@ -582,6 +582,7 @@
   "Knowledge Base functionality is not available on Windows ARM64 due to library compatibility issues. This feature is supported on Windows x64, macOS, and Linux.": "由于库兼容性问题，知识库功能在 Windows ARM64 上不可用。此功能在 Windows x64、macOS 和 Linux 上可用。",
   "LAN Sync": "局域网同步",
   "LAN Sync is off": "局域网同步未启动",
+  "Auto sync in {{seconds}}s": "{{seconds}} 秒后自动同步",
   "Nothing to sync": "暂无新内容",
   "Phone connected": "手机已连接",
   "Sent to computer. Its reply will sync back here.": "已发送到电脑端，回复会同步回来。",

@@ -44,6 +44,11 @@ interface LanSyncAutoState {
   lastSyncAt: number | null
   /** 最近一次失败原因。 */
   lastError: string | null
+  /**
+   * 下一次自动同步的时刻（第 24 轮：侧边栏的倒计时圈据此绘制）。
+   * null = 自动同步没在跑（非桌面端，或还没调用 startLanSyncAutoSync）。
+   */
+  nextSyncAt: number | null
 }
 
 export const useLanSyncState = create<LanSyncAutoState>(() => ({
@@ -52,6 +57,7 @@ export const useLanSyncState = create<LanSyncAutoState>(() => ({
   syncing: false,
   lastSyncAt: null,
   lastError: null,
+  nextSyncAt: null,
 }))
 
 /** 侧边栏读这个判断是否渲染（桌面端才有局域网同步）。 */
@@ -209,7 +215,12 @@ function install(): () => void {
   const statusTimer = setInterval(() => {
     void refreshLanSyncStatus()
   }, LAN_SYNC_STATUS_POLL_MS)
+  // 第 24 轮：把「下一次自动同步的时刻」写进 store，侧边栏据此画倒计时圈。
+  // 时间戳在每次 tick 刚进来时就算好（而不是等推送跑完），所以圈转满的那一刻
+  // 正好是 autoSyncTick 开跑的那一刻 ——「倒计时转完 = 自动同步」在视觉上对得上。
+  useLanSyncState.setState({ nextSyncAt: Date.now() + LAN_SYNC_AUTO_SYNC_MS })
   const syncTimer = setInterval(() => {
+    useLanSyncState.setState({ nextSyncAt: Date.now() + LAN_SYNC_AUTO_SYNC_MS })
     void autoSyncTick()
   }, LAN_SYNC_AUTO_SYNC_MS)
   return () => {
@@ -234,7 +245,7 @@ export function startLanSyncAutoSync(): () => void {
       refCount = 0
       teardown?.()
       teardown = null
-      useLanSyncState.setState({ status: null, dirty: false, syncing: false })
+      useLanSyncState.setState({ status: null, dirty: false, syncing: false, nextSyncAt: null })
     }
   }
 }

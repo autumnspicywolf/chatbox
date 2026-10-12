@@ -582,6 +582,7 @@
   "Knowledge Base functionality is not available on Windows ARM64 due to library compatibility issues. This feature is supported on Windows x64, macOS, and Linux.": "Knowledge Base functionality is not available on Windows ARM64 due to library compatibility issues. This feature is supported on Windows x64, macOS, and Linux.",
   "LAN Sync": "LAN Sync",
   "LAN Sync is off": "LAN Sync is off",
+  "Auto sync in {{seconds}}s": "Auto sync in {{seconds}}s",
   "Nothing to sync": "Nothing to sync",
   "Phone connected": "Phone connected",
   "Sent to computer. Its reply will sync back here.": "Sent to computer. Its reply will sync back here.",

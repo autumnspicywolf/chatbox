@@ -31,10 +31,12 @@ import { useIsSmallScreen, useSidebarWidth } from './hooks/useScreenChange'
 import useVersion from './hooks/useVersion'
 import { navigateToSettings } from './modals/settings-navigation'
 import { trackingEvent } from './packages/event'
+import { lanSyncRingProgress } from './packages/lan-sync/ring-progress'
 import { getSidebarModalSx } from './sidebar-drawer'
 import icon from './static/icon.png'
 import {
   isLanSyncAvailable,
+  LAN_SYNC_AUTO_SYNC_MS,
   pushLanSync,
   startLanSyncAutoSync,
   useLanSyncState,
@@ -458,6 +460,86 @@ function AboutNavLink({
   )
 }
 
+/** 倒计时圈的直径 / 线宽（第 24 轮）。 */
+const LAN_SYNC_RING_SIZE = 20
+const LAN_SYNC_RING_STROKE = 2.5
+/** 圈中心秒数的样式：小号加粗、跟随外层 currentColor。 */
+const LAN_SYNC_RING_LABEL_STYLE = { fontSize: 10, fontWeight: 700, lineHeight: 1, color: 'inherit' }
+
+/**
+ * 「手机已连接」左侧的自动同步倒计时圈（第 24 轮）。
+ *
+ * - 按 LAN_SYNC_AUTO_SYNC_MS（30s）转满一圈，圆心显示剩余秒数；转满即触发自动同步。
+ * - 有改动待推送（pending）或正在推送（syncing）时整体换成警示色 —— 一眼看出「还有东西没推上去」。
+ * - 自己每 200ms 重绘一次；单独成组件，Sidebar 其余部分不受牵连。
+ */
+function LanSyncCountdownRing({
+  nextSyncAt,
+  pending,
+  syncing,
+}: {
+  nextSyncAt: number | null
+  pending: boolean
+  syncing: boolean
+}) {
+  const { t } = useTranslation()
+  const [, forceRedraw] = useState(0)
+
+  useEffect(() => {
+    if (nextSyncAt == null) return
+    const timer = setInterval(() => forceRedraw((n) => n + 1), 200)
+    return () => clearInterval(timer)
+  }, [nextSyncAt])
+
+  const radius = (LAN_SYNC_RING_SIZE - LAN_SYNC_RING_STROKE) / 2
+  const circumference = 2 * Math.PI * radius
+  const { seconds, progress } = lanSyncRingProgress(nextSyncAt, {
+    now: Date.now(),
+    intervalMs: LAN_SYNC_AUTO_SYNC_MS,
+  })
+  const color = pending || syncing ? 'chatbox-warning' : 'chatbox-success'
+
+  return (
+    <Box
+      c={color}
+      w={LAN_SYNC_RING_SIZE}
+      h={LAN_SYNC_RING_SIZE}
+      miw={LAN_SYNC_RING_SIZE}
+      className="relative flex items-center justify-center"
+      title={t('Auto sync in {{seconds}}s', { seconds })}
+    >
+      <svg
+        width={LAN_SYNC_RING_SIZE}
+        height={LAN_SYNC_RING_SIZE}
+        className="absolute inset-0 -rotate-90"
+        aria-hidden="true"
+      >
+        <circle
+          cx={LAN_SYNC_RING_SIZE / 2}
+          cy={LAN_SYNC_RING_SIZE / 2}
+          r={radius}
+          fill="none"
+          stroke="currentColor"
+          strokeOpacity={0.18}
+          strokeWidth={LAN_SYNC_RING_STROKE}
+        />
+        <circle
+          cx={LAN_SYNC_RING_SIZE / 2}
+          cy={LAN_SYNC_RING_SIZE / 2}
+          r={radius}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={LAN_SYNC_RING_STROKE}
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={circumference * (1 - progress)}
+        />
+      </svg>
+      <span style={LAN_SYNC_RING_LABEL_STYLE}>{seconds}</span>
+    </Box>
+  )
+}
+
 /**
  * 需求 1：桌面端「关于」上方的「手机已连接 / 等待手机连接」提示 + 一键同步按钮。
  *
@@ -470,6 +552,8 @@ function LanSyncNavLink() {
   const available = isLanSyncAvailable()
   const status = useLanSyncState((s) => s.status)
   const syncing = useLanSyncState((s) => s.syncing)
+  const dirty = useLanSyncState((s) => s.dirty)
+  const nextSyncAt = useLanSyncState((s) => s.nextSyncAt)
   const [flash, setFlash] = useState<{ ok: boolean; text: string } | null>(null)
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -519,7 +603,11 @@ function LanSyncNavLink() {
         onClick={() => navigateToSettings('/lan-sync')}
         title={flash?.text || label}
       >
-        <Box w={8} h={8} miw={8} bg={dotColor} style={{ borderRadius: '50%' }} />
+        {running ? (
+          <LanSyncCountdownRing nextSyncAt={nextSyncAt} pending={dirty} syncing={syncing} />
+        ) : (
+          <Box w={8} h={8} miw={8} bg={dotColor} style={{ borderRadius: '50%' }} />
+        )}
         <Text size="sm" c={connected ? 'chatbox-secondary' : 'chatbox-tertiary'} lineClamp={1} flex={1}>
           {flash?.text || label}
         </Text>
