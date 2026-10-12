@@ -1,11 +1,11 @@
 import { randomBytes, randomInt } from 'node:crypto'
-import http from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import http from 'node:http'
 import { networkInterfaces } from 'node:os'
 import {
   LAN_SYNC_PROTOCOL_VERSION,
-  LanSyncHttpPath,
   type LanSyncForwardedMessage,
+  LanSyncHttpPath,
   type LanSyncManifest,
   type LanSyncPackage,
   type LanSyncServerStatus,
@@ -270,6 +270,9 @@ export class LanSyncServer {
         deviceName: this.deviceName,
         protocolVersion: LAN_SYNC_PROTOCOL_VERSION,
         requiresPairing: true,
+        // 第 25 轮：手机端原生保活服务靠它判断「电脑端有没有新批次」，免鉴权、只读
+        hasPackage: this.pkg !== null,
+        lastBatchId: this.pkg?.batchId ?? null,
       })
       return
     }
@@ -333,7 +336,7 @@ export class LanSyncServer {
         `event: ready\ndata: ${JSON.stringify({
           deviceName: this.deviceName,
           hasPackage: this.pkg !== null,
-        })}\n\n`,
+        })}\n\n`
       )
       this.sseClients.add(res)
       if (!this.pingTimer) {

@@ -21,6 +21,7 @@
 import { resolveSessionMode } from '@chatbox/core/session/mode-policy'
 import type { Message, Session } from '@shared/types'
 import { rendererApplication } from '@/app/renderer-application'
+import { announceLanSyncTaskComplete } from '@/packages/lan-sync/mobile-keepalive'
 import { settingsStore } from '@/settings-runtime'
 import { isSuccessfulAssistantReply } from '@/stores/session/message-success'
 import { getSessionAgentModeEntry } from '@/stores/session/agent-mode'
@@ -229,6 +230,7 @@ export function playLanSyncTaskCompleteSounds(entries: Record<string, unknown> |
 
   const lastCompleted = readLastCompletedMap()
   let shouldPlay = false
+  let notifyName = ''
   let changed = false
 
   for (const [key, rawSession] of sessionEntries) {
@@ -245,7 +247,11 @@ export function playLanSyncTaskCompleteSounds(entries: Record<string, unknown> |
       // 第一次见到这个会话：只登记基线，不响。
     } else if (seenId !== latestId) {
       const isWorkMode = resolveSessionMode(getSessionAgentModeEntry(sessionId, session).value) === 'work'
-      if (isWorkMode) shouldPlay = true
+      if (isWorkMode) {
+        shouldPlay = true
+        const rawName = (session as { name?: unknown }).name
+        if (typeof rawName === 'string' && rawName) notifyName = rawName
+      }
     }
 
     if (seenId !== latestId) {
@@ -255,5 +261,8 @@ export function playLanSyncTaskCompleteSounds(entries: Record<string, unknown> |
   }
 
   if (changed) writeLastCompletedMap(lastCompleted)
-  if (shouldPlay) playTaskCompleteSound(soundDurationSeconds())
+  if (shouldPlay) {
+    // 第 23 轮：桌面端响「叮咚」不变；Android 后台改成系统通知（见 mobile-keepalive）
+    void announceLanSyncTaskComplete(notifyName, () => playTaskCompleteSound(soundDurationSeconds()))
+  }
 }

@@ -17,10 +17,9 @@
  * 因此电脑端在手机离线期间推的包也能在手机下次上线时补齐。
  */
 
-import { create } from 'zustand'
 import { LAN_SYNC_DEFAULT_PORT } from '@shared/lan-sync/protocol'
+import { create } from 'zustand'
 import { rendererApplication } from '@/app/renderer-application'
-import platform from '@/platform'
 import {
   applyPackage,
   fetchPackage,
@@ -32,6 +31,8 @@ import {
   normalizeBaseUrl,
   subscribePackageEvents,
 } from '@/packages/lan-sync/client'
+import { markLanSyncSynced, startLanSyncKeepAlive, stopLanSyncKeepAlive } from '@/packages/lan-sync/mobile-keepalive'
+import platform from '@/platform'
 import { markLanSyncImportedSessions } from '@/stores/lan-sync-imported'
 import { playLanSyncTaskCompleteSounds } from '@/stores/task-complete-sound'
 
@@ -183,6 +184,8 @@ function sessionIdsFromPackage(entries: Record<string, unknown> | undefined): st
 async function pullAndApply(activeToken: string, reason: string): Promise<void> {
   const pkg = await fetchPackage(useLanSyncClientState.getState().baseUrl, activeToken)
   const applied = await applyPackage(pkg)
+  // 第 25 轮：这批已经落到手机上了，让原生撤掉「有新消息」提醒
+  void markLanSyncSynced(pkg.batchId)
   // 需求 1 / 2：记住哪些会话是电脑端来的 —— 列表要加图标，且往里发消息要转发回电脑端。
   markLanSyncImportedSessions(sessionIdsFromPackage(pkg.entries))
   // 第 21 轮：首次同步回「电脑端刚完成的工作模式任务」时响一次提示音（重复同步不会重复响）。
@@ -236,6 +239,9 @@ function ensureSubscription(activeToken: string): void {
 
   subscription = subscribePackageEvents(baseUrl, activeToken, {
     onReady: (info) => {
+      // 第 23 轮：连上后拉起原生前台服务保活（仅 Android；其它平台 no-op）
+      // 第 25 轮：连上（含重连）时把地址同步给原生服务
+      void startLanSyncKeepAlive(baseUrl)
       clearReadyTimer()
       setState({
         connecting: false,
@@ -329,13 +335,22 @@ export async function connectLanSyncClient(input: { baseUrl: string; code?: stri
 
 export function disconnectLanSyncClient(): void {
   closeSubscription()
+  // 第 23 轮：用户主动断开，停掉前台保活服务
+  void stopLanSyncKeepAlive()
   setState({ connected: false, connecting: false, notice: { type: 'info', text: '已断开' } })
 }
 
 export function rePairLanSyncClient(): void {
   closeSubscription()
+  // 第 23 轮：重新配对期间停掉前台保活服务（连上后 onReady 会再拉起）
+  void stopLanSyncKeepAlive()
   clearStoredToken()
-  setState({ token: '', connected: false, connecting: false, notice: { type: 'info', text: '已清除本机令牌，请重新输入配对码连接' } })
+  setState({
+    token: '',
+    connected: false,
+    connecting: false,
+    notice: { type: 'info', text: '已清除本机令牌，请重新输入配对码连接' },
+  })
 }
 
 export function setLanSyncClientBaseUrl(url: string): void {

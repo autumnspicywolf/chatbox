@@ -65,8 +65,15 @@ describe('LanSyncServer', () => {
     const infoResponse = await fetch(`${base}/lan-sync/info`)
     expect(infoResponse.status).toBe(200)
     expect(infoResponse.headers.get('access-control-allow-origin')).toBe('*')
-    const info = (await infoResponse.json()) as { deviceName: string }
+    const info = (await infoResponse.json()) as {
+      deviceName: string
+      hasPackage?: boolean
+      lastBatchId?: string | null
+    }
     expect(info.deviceName).toBe('TestPC')
+    // 第 25 轮：手机端原生保活服务靠这两个字段判断「电脑端有没有新批次」
+    expect(info.hasPackage).toBe(false)
+    expect(info.lastBatchId).toBeNull()
 
     // 错误配对码 → 401
     const badResponse = await fetch(`${base}/lan-sync/handshake`, {
@@ -92,7 +99,7 @@ describe('LanSyncServer', () => {
 
     // 还没推送过 → 404
     expect((await fetch(`${base}/lan-sync/package`, { headers: { authorization: `Bearer ${token}` } })).status).toBe(
-      404,
+      404
     )
 
     // 订阅推送
@@ -129,6 +136,14 @@ describe('LanSyncServer', () => {
     expect(payload.package.sessionCount).toBe(1)
     expect(payload.package.entries['session:s1']).toEqual({ id: 's1', name: '会话一' })
 
+    // 第 25 轮：推送之后，免鉴权的 info 要能报出最新批次号（原生轮询据此弹提醒）
+    const infoAfter = (await (await fetch(`${base}/lan-sync/info`)).json()) as {
+      hasPackage?: boolean
+      lastBatchId?: string | null
+    }
+    expect(infoAfter.hasPackage).toBe(true)
+    expect(infoAfter.lastBatchId).toBe('b-test')
+
     close()
   })
 
@@ -154,8 +169,7 @@ describe('LanSyncServer', () => {
 
     // 持久化 token 可用
     expect(
-      (await fetch(`${base}/lan-sync/package`, { headers: { authorization: `Bearer ${credentials.token}` } }))
-        .status,
+      (await fetch(`${base}/lan-sync/package`, { headers: { authorization: `Bearer ${credentials.token}` } })).status
     ).toBe(404)
 
     const events: string[] = []
@@ -172,11 +186,10 @@ describe('LanSyncServer', () => {
     expect(srv.status().pairingCode).toBe('654321')
     expect(srv.status().connectedClients).toBe(0)
     expect(
-      (await fetch(`${base}/lan-sync/package`, { headers: { authorization: `Bearer ${credentials.token}` } }))
-        .status,
+      (await fetch(`${base}/lan-sync/package`, { headers: { authorization: `Bearer ${credentials.token}` } })).status
     ).toBe(401)
     expect(
-      (await fetch(`${base}/lan-sync/package`, { headers: { authorization: `Bearer ${rotated.token}` } })).status,
+      (await fetch(`${base}/lan-sync/package`, { headers: { authorization: `Bearer ${rotated.token}` } })).status
     ).toBe(404)
     close()
   })
@@ -198,7 +211,7 @@ describe('LanSyncServer', () => {
           headers: { 'content-type': 'application/json' },
           body,
         })
-      ).status,
+      ).status
     ).toBe(401)
 
     // 带了 token 但还没注入处理器（renderer 未就绪）→ 503
@@ -209,7 +222,7 @@ describe('LanSyncServer', () => {
           headers: { 'content-type': 'application/json', authorization: `Bearer ${credentials.token}` },
           body,
         })
-      ).status,
+      ).status
     ).toBe(503)
 
     const received: { sessionId: string; text: string }[] = []
@@ -223,7 +236,7 @@ describe('LanSyncServer', () => {
           headers: { 'content-type': 'application/json', authorization: `Bearer ${credentials.token}` },
           body: JSON.stringify({ sessionId: 's1', text: '   ' }),
         })
-      ).status,
+      ).status
     ).toBe(400)
 
     const okResponse = await fetch(`${base}/lan-sync/forward`, {
