@@ -56,6 +56,7 @@ import {
 } from '@/stores/session/utils'
 import { markSessionReplyCompleted } from '@/stores/sessionActivityStore'
 import * as settingActions from '@/stores/settingActions'
+import { notifyTaskCompleteSound } from '@/stores/task-complete-sound'
 import { uiStore } from '@/stores/uiStore'
 import { trackEvent } from '@/utils/track'
 import { CurrentAttachmentAdapter } from './CurrentAttachmentAdapter'
@@ -299,6 +300,7 @@ const dependencies: GenerationServiceDependencies<ModelDependencies> = {
     afterMessageGenerated: (sessionId, message) => {
       appleAppStore.tickAfterMessageGenerated()
       markSessionReplyCompleted(sessionId, message)
+      notifyTaskCompleteSound(sessionId, message) // 第 21 轮：工作模式任务完成提示音
     },
     now: Date.now,
   },

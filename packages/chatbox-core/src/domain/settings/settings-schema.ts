@@ -572,6 +572,12 @@ export const SettingsSchema = GlobalSessionSettingsSchema.extend({
   autoPreviewArtifacts: z.boolean().default(false), // 是否自动展开预览 artifacts
   autoCollapseCodeBlock: z.boolean().default(true), // 是否自动折叠代码块
   pasteLongTextAsAFile: z.boolean().default(true), // 是否将长文本粘贴为文件
+  // 第 21 轮：工作模式（Work Mode）下任务完成时播放「叮咚」提示音。
+  // 桌面端在生成完成时响；手机端(局域网同步客户端)首次收到电脑端刚完成的任务时响。
+  soundOnTaskComplete: z.boolean().default(true),
+  // 第 21 轮续：「叮咚」重复播放的时长（秒，1–10，默认 3）。每秒重复一次，
+  // 所以 3 秒 = 连响三声；用 .catch 兜住越界/脏数据，退回默认值。
+  soundOnTaskCompleteDuration: z.number().min(1).max(10).catch(3),
 
   autoGenerateTitle: z.boolean().default(true),
 

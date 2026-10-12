@@ -49,6 +49,8 @@ export function createDefaultSettings(): Settings {
     autoPreviewArtifacts: false,
     autoCollapseCodeBlock: true,
     pasteLongTextAsAFile: true,
+    soundOnTaskComplete: true,
+    soundOnTaskCompleteDuration: 3,
     autoGenerateTitle: true,
     autoCompaction: true,
     compactionThreshold: 0.6,

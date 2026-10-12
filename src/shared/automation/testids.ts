@@ -135,6 +135,8 @@ export const TestId = {
   },
   settings: {
     pauseOnToolCallLimitSwitch: 'settings-pause-on-tool-call-limit',
+    soundOnTaskCompleteSwitch: 'settings-sound-on-task-complete',
+    soundOnTaskCompleteDurationInput: 'settings-sound-on-task-complete-duration',
     sessionPauseOnToolCallLimitSwitch: 'session-settings-pause-on-tool-call-limit',
     providerList: 'settings-provider-list',
     /** Hosts AutomationAdjacentAttr.providerId. */

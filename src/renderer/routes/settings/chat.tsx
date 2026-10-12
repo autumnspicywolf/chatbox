@@ -18,6 +18,11 @@ import { languageNameMap } from '@/i18n/locales'
 import storage from '@/storage'
 import { StorageKeyGenerator } from '@/storage/StoreStorage'
 import { useSettingsStore } from '@/stores/settingsStore'
+import {
+  DEFAULT_TASK_COMPLETE_SOUND_SECONDS,
+  MAX_TASK_COMPLETE_SOUND_SECONDS,
+  MIN_TASK_COMPLETE_SOUND_SECONDS,
+} from '@/stores/task-complete-sound'
 import { add as addToast } from '@/stores/toastActions'
 
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024 // 5MB
@@ -400,6 +405,40 @@ export function RouteComponent() {
         {/* Function */}
         <Stack gap="sm">
           <Text c="chatbox-tertiary">{t('Function')}</Text>
+
+          <Switch
+            data-testid={TestId.settings.soundOnTaskCompleteSwitch}
+            label={t('Play a sound when a task completes')}
+            description={t(
+              'In Work Mode you will hear a ding-dong when a task finishes. On your phone it also plays once when a task finished on your computer syncs in.'
+            )}
+            checked={settings.soundOnTaskComplete}
+            onChange={() =>
+              setSettings({
+                soundOnTaskComplete: !settings.soundOnTaskComplete,
+              })
+            }
+          />
+
+          {settings.soundOnTaskComplete && (
+            <Stack gap="xxs" pl="md">
+              <Text size="sm">{t('Sound duration')}</Text>
+              <SliderWithInput
+                inputTestId={TestId.settings.soundOnTaskCompleteDurationInput}
+                value={settings.soundOnTaskCompleteDuration}
+                onChange={(value) =>
+                  setSettings({ soundOnTaskCompleteDuration: value ?? DEFAULT_TASK_COMPLETE_SOUND_SECONDS })
+                }
+                min={MIN_TASK_COMPLETE_SOUND_SECONDS}
+                max={MAX_TASK_COMPLETE_SOUND_SECONDS}
+                step={1}
+                suffix="s"
+              />
+              <Text size="xs" c="chatbox-tertiary">
+                {t('The ding-dong repeats once per second, so 3 seconds plays it three times.')}
+              </Text>
+            </Stack>
+          )}
 
           <Switch
             label={t('Auto-collapse code blocks')}
