@@ -1267,7 +1267,21 @@ function getFirstStringValue(source: unknown, keys: string[]): string | undefine
 }
 
 function truncateSummary(value: string, maxLength = 56): string {
-  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value
+  if (value.length <= maxLength) return value
+  // 第 28 轮：路径类摘要改成「留尾」——本机绝对路径（E:\Users\...\Chatbox\src\renderer\stores\lan-sync.ts）
+  // 动辄 80~90 字，以前从尾部砍到 56 字，砍掉的正好是文件名，用户反馈「文件名都看不到」。
+  return isPathLike(value) ? `…${value.slice(value.length - (maxLength - 1))}` : `${value.slice(0, maxLength - 1)}…`
+}
+
+/**
+ * 第 28 轮：粗略判断一个摘要是不是文件路径，用来决定截断方向。
+ * 判据刻意保守：要同时有路径分隔符 **且** 最后一段带扩展名（lan-sync.ts / app-debug.apk），
+ * 这样普通句子、shell 命令（cmd /c "..."）不会被误判成路径而只露出尾巴。
+ */
+function isPathLike(value: string): boolean {
+  if (!/[\\/]/.test(value)) return false
+  const lastSeparator = Math.max(value.lastIndexOf('/'), value.lastIndexOf('\\'))
+  return /\.[A-Za-z0-9]{1,12}$/.test(value.slice(lastSeparator + 1))
 }
 
 const ToolCallRunningDots: FC = () => (
@@ -1703,8 +1717,16 @@ const TimelineToolCallStepContent: FC<TimelineToolCallStepProps & { commandResul
           <Text size="sm" fw={500} c={isError ? 'chatbox-error' : 'chatbox-primary'} lh="20px" className="shrink-0">
             {getToolName(part.toolName, part.args)}
           </Text>
+          {/* 第 28 轮：路径类摘要在 truncateSummary 里已经「留尾」（…\src\stores\lan-sync.ts），
+              这里再让 CSS 从头部截断，保证窗口再窄，文件名也留在最后看得见。 */}
           {summary && (
-            <Text size="xs" c="chatbox-tertiary" lh="20px" truncate="end" style={{ minWidth: 0 }}>
+            <Text
+              size="xs"
+              c="chatbox-tertiary"
+              lh="20px"
+              truncate={summary.startsWith('…') ? 'start' : 'end'}
+              style={{ minWidth: 0 }}
+            >
               · {summary}
             </Text>
           )}
