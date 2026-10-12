@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { RunCommandShell } from '@shared/types/command-execution'
 import type { UserExecApprovalSource } from '@shared/types/user-exec'
+import { type CommandConsoleWindow, openCommandConsoleWindow } from '../command-console-window'
 import { consumeFailedCommandRetry } from '../command-execution-policy'
 import {
   COMMAND_OUTPUT_CAPTURE_FAILED_MESSAGE,
@@ -97,6 +98,7 @@ export async function executeUserExecCommand(params: UserExecParams): Promise<Us
     injectBundledNode,
   } = params
   let resolvedCwd: string | undefined
+  let consoleWindow: CommandConsoleWindow | null = null
 
   try {
     if (!command || typeof command !== 'string') throw new Error('Command is required')
@@ -154,7 +156,11 @@ export async function executeUserExecCommand(params: UserExecParams): Promise<Us
     const hostCommand =
       injectBundledNode && !isWindows ? buildSandboxStdinScript(command, 'bash', process.execPath, true) : command
     const shellArgs = powershell?.args ?? ['-lc', hostCommand]
-    const outputCapture = createCommandOutputCapture(createCommandOutputCapturePath(toolCallId))
+    // 把命令跑的过程镜像到一个可见的控制台窗口里（见 command-console-window.ts）。
+    // 真正的执行路径一点没变：仍然管道捕获、仍然全量落盘，这里只是多开一个「显示器」。
+    const capturePath = createCommandOutputCapturePath(toolCallId)
+    consoleWindow = openCommandConsoleWindow({ command, capturePath, powershellPath: powershell?.cmd })
+    const outputCapture = createCommandOutputCapture(capturePath, { retainOutputFile: consoleWindow !== null })
 
     // GUI-launched Electron inherits launchd's minimal PATH; `bash -l` alone doesn't recover
     // it on macOS (Homebrew configures zsh's ~/.zprofile, which bash never sources). Read the
@@ -182,6 +188,12 @@ export async function executeUserExecCommand(params: UserExecParams): Promise<Us
         if (activeKey) activeUserExecCommands.delete(activeKey)
         void (async () => {
           const outputFile = await outputCapture.finish()
+          // 退出码/耗时只喂给窗口的「命令结束」横幅，不影响回填给模型的结果。
+          consoleWindow?.close({
+            keepCaptureFile: outputFile !== undefined,
+            exitCode: result.exitCode,
+            durationMs: Date.now() - startedAt,
+          })
           const capturedResult = {
             ...result,
             ...(outputCapture.isFailed()
@@ -216,6 +228,9 @@ export async function executeUserExecCommand(params: UserExecParams): Promise<Us
         stdio: [isWindows ? 'pipe' : 'ignore', 'pipe', 'pipe'],
         env: spawnEnv,
         shell: false,
+        // 输出走管道，子进程本来就不需要控制台；显式隐藏，避免在没有控制台的宿主里
+        // 额外闪一个空白窗口（可见窗口由 command-console-window 负责）。
+        windowsHide: true,
         // Keep the command in its own POSIX process group so cancellation also
         // terminates descendants. Windows uses taskkill /T in killProcessTree.
         detached: !isWindows,
@@ -312,6 +327,7 @@ export async function executeUserExecCommand(params: UserExecParams): Promise<Us
       })
     })
   } catch (error) {
+    consoleWindow?.close()
     log.error('skills:user-exec failed', error)
     return {
       success: false,

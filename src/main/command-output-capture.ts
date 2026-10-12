@@ -47,7 +47,8 @@ export function cleanupStaleCommandOutputCaptures(options?: { now?: number; root
   if (!existsSync(root)) return
   const now = options?.now ?? Date.now()
   for (const entry of readdirSync(root, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith('.txt')) continue
+    // *.txt 是命令捕获，*.viewer.ps1 是镜像窗口的临时脚本（窗口被手动叉掉时它会残留在盘上）。
+    if (!entry.isFile() || !(entry.name.endsWith('.txt') || entry.name.endsWith('.viewer.ps1'))) continue
     const filePath = path.join(root, entry.name)
     try {
       if (now - statSync(filePath).mtimeMs > CAPTURE_MAX_AGE_MS) rmSync(filePath, { force: true })
@@ -57,8 +58,15 @@ export function cleanupStaleCommandOutputCaptures(options?: { now?: number; root
   }
 }
 
-/** Stream complete command output to disk while the caller retains only a short in-memory preview. */
-export function createCommandOutputCapture(outputFilePath: string): CommandOutputCapture {
+/**
+ * Stream complete command output to disk while the caller retains only a short in-memory preview.
+ * `retainOutputFile` keeps the file on disk even when the output is small enough to be inlined
+ * (used when a command console window is still reading it); it never changes what finish() returns.
+ */
+export function createCommandOutputCapture(
+  outputFilePath: string,
+  options?: { retainOutputFile?: boolean }
+): CommandOutputCapture {
   mkdirSync(path.dirname(outputFilePath), { recursive: true, mode: 0o700 })
   const stream = createWriteStream(outputFilePath, { flags: 'wx', mode: 0o600 })
   const sourceBytes = { stdout: 0, stderr: 0 }
@@ -126,10 +134,11 @@ export function createCommandOutputCapture(outputFilePath: string): CommandOutpu
       }
       await completion
       const previewWasTruncated = Object.values(sourceBytes).some((bytes) => bytes > INLINE_STREAM_PREVIEW_BYTES)
-      if (failed || !previewWasTruncated) {
+      const retained = !previewWasTruncated && options?.retainOutputFile === true && opened
+      if (failed || (!previewWasTruncated && !retained)) {
         if (!failed || opened) rmSync(outputFilePath, { force: true })
-        return undefined
       }
+      if (failed || !previewWasTruncated) return undefined
       return outputFilePath
     },
   }
