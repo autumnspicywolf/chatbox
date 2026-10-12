@@ -18,7 +18,7 @@ import path from 'node:path'
 import { TanStackRouterVite } from '@tanstack/router-plugin/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
-import { dvhToVh, injectBaseTag } from './electron.vite.config'
+import { dvhToVh, injectBaseTag, injectViewportContent } from './electron.vite.config'
 
 export default defineConfig({
   root: 'src/renderer',
@@ -32,6 +32,7 @@ export default defineConfig({
     react({}),
     dvhToVh(),
     injectBaseTag(),
+    injectViewportContent(false),
   ],
   resolve: {
     alias: {
