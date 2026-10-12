@@ -9,6 +9,34 @@ interface SkillScriptResult {
   cancelled?: boolean
   cwd?: string
   outputFile?: string
+  /** 阶段 2：命令静默过久，被交给后台 job，工具调用提前落定。 */
+  running?: boolean
+  jobId?: string
+  jobReason?: 'idle' | 'timeout'
+  idleMs?: number
+  /** 阶段 1：命令本身退出了，但有后代进程仍跑着并占着输出管道。 */
+  detachedDescendants?: boolean
+}
+
+export type CommandJobState = 'running' | 'exited' | 'killed'
+
+export interface CommandJobSnapshot {
+  id: string
+  command: string
+  cwd?: string
+  pid: number | null
+  state: CommandJobState
+  exitCode: number | null
+  startedAt: number
+  lastOutputAt: number
+  idleMs: number
+  outputBytes: number
+  recentOutput: string
+}
+
+export interface CommandJobWaitOutcome {
+  reason: 'output' | 'exited' | 'timeout'
+  snapshot: CommandJobSnapshot
 }
 
 interface SkillInstallResult {
@@ -83,6 +111,7 @@ export const skillsController = {
     options?: {
       cwd?: string
       timeout?: number
+      idleTimeoutMs?: number
       sessionId?: string
       toolCallId?: string
       approvalSource?: UserExecApprovalSource
@@ -111,6 +140,23 @@ export const skillsController = {
 
   cancelUserExec(options: { sessionId?: string; toolCallId: string }): Promise<{ killed: boolean }> {
     return window.electronAPI.invoke('skills:user-exec-cancel', options)
+  },
+
+  /** 阶段 2：命令被交给后台 job 之后，模型用这几个方法接管它。 */
+  commandJobStatus(jobId: string): Promise<CommandJobSnapshot | null> {
+    return window.electronAPI.invoke('skills:command-job-status', { jobId })
+  },
+
+  commandJobList(sessionId?: string): Promise<CommandJobSnapshot[]> {
+    return window.electronAPI.invoke('skills:command-job-list', { sessionId })
+  },
+
+  commandJobWait(jobId: string, timeoutMs?: number): Promise<CommandJobWaitOutcome | null> {
+    return window.electronAPI.invoke('skills:command-job-wait', { jobId, timeoutMs })
+  },
+
+  commandJobKill(jobId: string): Promise<{ killed: boolean; jobId: string; snapshot?: CommandJobSnapshot }> {
+    return window.electronAPI.invoke('skills:command-job-kill', { jobId })
   },
 
   async installMarketplaceSkill(skill: MarketplaceSkill): Promise<SkillInstallResult> {

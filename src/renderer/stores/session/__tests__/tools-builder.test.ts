@@ -11,6 +11,7 @@ const {
   isProMock,
   webSearchProvider,
   buildCodeExecutionToolsMock,
+  buildCommandJobToolMock,
   buildRunCommandToolMock,
   getSessionAttachmentRagToolSetMock,
   skillsChangedListeners,
@@ -35,6 +36,7 @@ const {
   webSearchProvider: { current: 'build-in' },
   buildCodeExecutionToolsMock: vi.fn(),
   buildRunCommandToolMock: vi.fn(),
+  buildCommandJobToolMock: vi.fn(),
   getSessionAttachmentRagToolSetMock: vi.fn(),
   skillsChangedListeners: new Set<() => void>(),
   requestUserExecApprovalMock: vi.fn(),
@@ -144,6 +146,7 @@ vi.mock('@/packages/model-calls/toolsets/code-execution', () => ({
 
 vi.mock('@/packages/model-calls/toolsets/run-command', () => ({
   buildRunCommandTool: buildRunCommandToolMock,
+  buildCommandJobTool: buildCommandJobToolMock,
 }))
 
 vi.mock('@/packages/model-calls/toolsets/web-search', () => {
@@ -257,6 +260,7 @@ beforeEach(() => {
     },
     ensureSandbox: vi.fn().mockResolvedValue({ success: true }),
   })
+  buildCommandJobToolMock.mockReturnValue({ description: 'command job toolset', tool: { execute: async () => ({}) } })
   buildRunCommandToolMock.mockReturnValue({
     description: 'run command toolset',
     tool: { execute: async () => ({}) },

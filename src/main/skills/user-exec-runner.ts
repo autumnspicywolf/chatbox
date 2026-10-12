@@ -11,18 +11,44 @@ import {
   createCommandOutputCapturePath,
 } from '../command-output-capture'
 import { buildOperationFinishLog, buildOperationStartLog, createOperationId } from '../operation-log'
-import { killProcessTree } from '../process-tree'
+import { killProcessTreeAsync } from '../process-tree'
 import { buildPowerShellStdinScript, buildSandboxStdinScript, stripCodesignNoise } from '../sandbox/exec-script'
 import { getLoginShellPathIfReady } from '../sandbox/login-shell-env'
 import { getLogger } from '../util'
 import { resolveWindowsPowerShell } from '../windows-powershell'
+import { type CommandJob, createCommandJob, disposeCommandJob, findCommandJobsByToolCall } from './command-jobs'
 
 const log = getLogger('skills:user-exec')
+
+const DEFAULT_TIMEOUT_MS = 120_000
+/**
+ * How long a command may be *silent* before we stop waiting inside the tool call
+ * and hand it to a background job (see command-jobs.ts) — the model then decides
+ * whether to keep waiting, kill it, or try something else.
+ */
+const DEFAULT_IDLE_TIMEOUT_MS = 120_000
+const MIN_IDLE_TIMEOUT_MS = 1_000
+const MAX_IDLE_TIMEOUT_MS = 30 * 60_000
+/** After the direct child exits, how long to wait for the stdio pipes to EOF. */
+const EXIT_PIPE_GRACE_MS = Number(process.env.CHATBOX_RUN_COMMAND_EXIT_GRACE_MS) || 3_000
+/** After a kill request, how long to wait for 'close' before forcing the pipes shut. */
+const TERMINATE_SETTLE_GRACE_MS = 1_500
+const FORCE_KILL_DELAY_MS = 3_000
+
+/** Idle threshold in ms; `CHATBOX_RUN_COMMAND_IDLE_MS` overrides the default. */
+export function resolveIdleTimeoutMs(requested?: number): number {
+  const envValue = Number(process.env.CHATBOX_RUN_COMMAND_IDLE_MS)
+  const candidate = requested ?? (Number.isFinite(envValue) ? envValue : DEFAULT_IDLE_TIMEOUT_MS)
+  if (!Number.isFinite(candidate) || candidate <= 0) return DEFAULT_IDLE_TIMEOUT_MS
+  return Math.min(Math.max(candidate, MIN_IDLE_TIMEOUT_MS), MAX_IDLE_TIMEOUT_MS)
+}
 
 export interface UserExecParams {
   command: string
   cwd?: string
   timeout?: number
+  /** Silence budget before the command is handed to a background job. */
+  idleTimeoutMs?: number
   sessionId?: string
   toolCallId?: string
   approvalSource?: UserExecApprovalSource
@@ -40,6 +66,20 @@ export interface UserExecResult {
   cancelled?: boolean
   cwd?: string
   outputFile?: string
+  /**
+   * Stage 2: the command went quiet for too long, so it was handed to a background
+   * job instead of blocking the tool call. `stdout` then holds the recent output
+   * (stdout+stderr merged) captured so far.
+   */
+  running?: boolean
+  jobId?: string
+  jobReason?: 'idle' | 'timeout'
+  idleMs?: number
+  /**
+   * Stage 1: the command itself exited, but descendant processes are still running
+   * and holding its output streams open. They were not killed and are not tracked.
+   */
+  detachedDescendants?: boolean
 }
 
 interface ActiveUserExecCommand {
@@ -72,11 +112,23 @@ function getUserExecKey(sessionId: string | undefined, toolCallId: string | unde
 }
 
 export function cancelUserExecCommand(params: Pick<UserExecParams, 'sessionId' | 'toolCallId'>): { killed: boolean } {
+  let killed = false
   const key = getUserExecKey(params.sessionId, params.toolCallId)
   const active = key ? activeUserExecCommands.get(key) : undefined
-  if (!active) return { killed: false }
-  active.cancel()
-  return { killed: true }
+  if (active) {
+    active.cancel()
+    killed = true
+  }
+  // A command that was already handed to a background job has no `active` entry
+  // (it settled the tool call), so look its job up by tool call id as well.
+  if (params.toolCallId) {
+    const jobs = findCommandJobsByToolCall(params.sessionId, params.toolCallId)
+    if (jobs.length > 0) {
+      killed = true
+      void Promise.all(jobs.map((job) => job.kill('SIGTERM')))
+    }
+  }
+  return { killed }
 }
 
 export function resolveUserExecCwd(params: Pick<UserExecParams, 'cwd' | 'baseCwd'>): string {
@@ -90,6 +142,7 @@ export async function executeUserExecCommand(params: UserExecParams): Promise<Us
     cwd: requestedCwd,
     baseCwd: requestedBaseCwd,
     timeout,
+    idleTimeoutMs: requestedIdleTimeoutMs,
     sessionId,
     toolCallId,
     approvalSource,
@@ -110,7 +163,8 @@ export async function executeUserExecCommand(params: UserExecParams): Promise<Us
       const retry = consumeFailedCommandRetry({ sessionId, retryOf, command, cwd, shell })
       if (!retry.valid) throw new Error(retry.error)
     }
-    const timeoutMs = timeout || 120_000
+    const timeoutMs = timeout || DEFAULT_TIMEOUT_MS
+    const idleTimeoutMs = resolveIdleTimeoutMs(requestedIdleTimeoutMs)
     const maxOutputBytes = 6_000
     const operationId = createOperationId()
     const startedAt = Date.now()
@@ -178,14 +232,66 @@ export async function executeUserExecCommand(params: UserExecParams): Promise<Us
       let cancelled = false
       let timedOut = false
       let outputLimitExceeded = false
-      let forceKillHandle: ReturnType<typeof setTimeout> | undefined
+      let terminating = false
+      let handedOff = false
+      let captureFinalized = false
+      let descendantsDetected = false
+      let lastOutputAt = Date.now()
+      let exitCode: number | null = null
+      let exitSignal: NodeJS.Signals | null = null
+      let pendingJob: CommandJob | undefined
       const activeKey = getUserExecKey(sessionId, toolCallId)
+
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+      let idleCheckHandle: ReturnType<typeof setInterval> | undefined
+      let forceKillHandle: ReturnType<typeof setTimeout> | undefined
+      let exitGraceHandle: ReturnType<typeof setTimeout> | undefined
+      let terminateGraceHandle: ReturnType<typeof setTimeout> | undefined
+
+      const clearTimers = () => {
+        if (timeoutHandle) clearTimeout(timeoutHandle)
+        if (idleCheckHandle) clearInterval(idleCheckHandle)
+        if (forceKillHandle) clearTimeout(forceKillHandle)
+        if (exitGraceHandle) clearTimeout(exitGraceHandle)
+        if (terminateGraceHandle) clearTimeout(terminateGraceHandle)
+      }
+
+      const scheduleForceKill = () => {
+        if (forceKillHandle) return
+        forceKillHandle = setTimeout(() => {
+          void killProcessTreeAsync(child, 'SIGKILL')
+        }, FORCE_KILL_DELAY_MS)
+      }
+
+      const buildResult = (): UserExecResult => {
+        if (cancelled) return { success: false, stdout, stderr, exitCode: 130, cancelled: true }
+        if (outputLimitExceeded) {
+          return {
+            success: false,
+            stdout,
+            stderr: `${stderr}${stderr ? '\n' : ''}[Command terminated: output exceeded the 10MB capture limit]`,
+            exitCode: 1,
+          }
+        }
+        if (timedOut || exitSignal === 'SIGTERM') {
+          return { success: false, stdout, stderr: stderr || `Command timed out (${timeoutMs / 1000}s)`, exitCode: null }
+        }
+        return {
+          success: exitCode === 0,
+          stdout,
+          stderr,
+          exitCode,
+          ...(descendantsDetected ? { detachedDescendants: true as const } : {}),
+        }
+      }
 
       const resolveOnce = (result: UserExecResult) => {
         if (settled) return
         settled = true
-        clearTimeout(timeoutHandle)
+        clearTimers()
         if (activeKey) activeUserExecCommands.delete(activeKey)
+        // A handed-off job must survive this tool call; only a settled one is dropped.
+        if (pendingJob && !handedOff) disposeCommandJob(pendingJob.id)
         void (async () => {
           const outputFile = await outputCapture.finish()
           // 退出码/耗时只喂给窗口的「命令结束」横幅，不影响回填给模型的结果。
@@ -223,6 +329,52 @@ export async function executeUserExecCommand(params: UserExecParams): Promise<Us
         })()
       }
 
+      /** 停止等待（不杀）：把命令交给后台 job，工具调用提前落定。 */
+      const handOff = (reason: 'idle' | 'timeout', idleForMs: number) => {
+        if (settled || handedOff) return
+        handedOff = true
+        finalizeCapture()
+        const snapshot = pendingJob?.snapshot()
+        resolveOnce({
+          success: true,
+          running: true,
+          ...(pendingJob ? { jobId: pendingJob.id } : {}),
+          jobReason: reason,
+          idleMs: idleForMs,
+          // 让模型「从已经输出的信息中判断」：给最近一段（stdout/stderr 合并的尾部）。
+          stdout: snapshot?.recentOutput ?? stdout,
+          stderr: '',
+          exitCode: null,
+        })
+      }
+
+      /** 主动终止：只杀不等待 'close' —— 后代可能一直握着管道，'close' 永远不来。 */
+      const requestTerminate = (reason: 'cancelled' | 'timeout') => {
+        if (settled || terminating) return
+        terminating = true
+        if (reason === 'cancelled') cancelled = true
+        else timedOut = true
+        if (idleCheckHandle) clearInterval(idleCheckHandle)
+        // 定时器同步武装：不要 await taskkill —— 它万一不退出，定时器就永远不会被排上，
+        // 反倒把这个工具调用重新卡死（而 timeout 分支此时已被 terminating 挡住）。
+        void killProcessTreeAsync(child, 'SIGTERM')
+        scheduleForceKill()
+        terminateGraceHandle = setTimeout(() => {
+          if (settled) return
+          stdoutStream.destroy()
+          stderrStream.destroy()
+          resolveOnce(buildResult())
+        }, TERMINATE_SETTLE_GRACE_MS)
+      }
+
+      const finalizeCapture = () => {
+        if (captureFinalized) return
+        captureFinalized = true
+        // 交给 job 之后只需要内存里的尾巴，背压不再适用：确保管道继续流。
+        stdoutStream.resume()
+        stderrStream.resume()
+      }
+
       const child = spawn(shellCommand, shellArgs, {
         cwd,
         stdio: [isWindows ? 'pipe' : 'ignore', 'pipe', 'pipe'],
@@ -236,24 +388,28 @@ export async function executeUserExecCommand(params: UserExecParams): Promise<Us
         detached: !isWindows,
       })
 
+      // 每个命令都登记一个 job：正常结束就随工具调用一起丢弃，静默超时就留给模型接管。
+      pendingJob = createCommandJob({ command, cwd, child, sessionId, toolCallId })
+
       if (activeKey) {
-        activeUserExecCommands.set(activeKey, {
-          cancel: () => {
-            if (settled || cancelled) return
-            cancelled = true
-            clearTimeout(timeoutHandle)
-            killProcessTree(child, 'SIGTERM')
-            forceKillHandle = setTimeout(() => killProcessTree(child, 'SIGKILL'), 3_000)
-          },
-        })
+        activeUserExecCommands.set(activeKey, { cancel: () => requestTerminate('cancelled') })
       }
 
-      const timeoutHandle = setTimeout(() => {
-        if (settled || child.killed) return
-        timedOut = true
-        killProcessTree(child, 'SIGTERM')
-        forceKillHandle = setTimeout(() => killProcessTree(child, 'SIGKILL'), 3_000)
+      timeoutHandle = setTimeout(() => {
+        if (settled || terminating) return
+        const idleForMs = Date.now() - lastOutputAt
+        // 静默够久 = 疑似卡住 → 交给模型判断；一直在输出 = 只是太久 → 按老规矩收掉。
+        if (idleForMs >= idleTimeoutMs) handOff('idle', idleForMs)
+        else requestTerminate('timeout')
       }, timeoutMs)
+
+      const idleCheckEveryMs = Math.max(500, Math.min(5_000, Math.floor(idleTimeoutMs / 4)))
+      idleCheckHandle = setInterval(() => {
+        if (settled || terminating) return
+        const idleForMs = Date.now() - lastOutputAt
+        if (idleForMs >= idleTimeoutMs) handOff('idle', idleForMs)
+      }, idleCheckEveryMs)
+      idleCheckHandle.unref?.()
 
       if (!child.stdout || !child.stderr) {
         child.kill('SIGTERM')
@@ -272,28 +428,32 @@ export async function executeUserExecCommand(params: UserExecParams): Promise<Us
 
       stdoutStream.on('data', (data: Buffer) => {
         stdoutBytes += data.byteLength
-        if (!outputCapture.append('stdout', data)) {
+        lastOutputAt = Date.now()
+        pendingJob?.appendOutput('stdout', data)
+        if (!captureFinalized && !outputCapture.append('stdout', data)) {
           stdoutStream.pause()
           outputCapture.onDrain(() => stdoutStream.resume())
         }
-        if (outputCapture.isLimitExceeded() && !outputLimitExceeded) {
+        if (!outputLimitExceeded && outputCapture.isLimitExceeded()) {
           outputLimitExceeded = true
-          killProcessTree(child, 'SIGTERM')
-          forceKillHandle = setTimeout(() => killProcessTree(child, 'SIGKILL'), 3_000)
+          void killProcessTreeAsync(child, 'SIGTERM')
+          scheduleForceKill()
         }
         const remaining = maxOutputBytes - Buffer.byteLength(stdout)
         if (remaining > 0) stdout += data.subarray(0, remaining).toString()
       })
       stderrStream.on('data', (data: Buffer) => {
         stderrBytes += data.byteLength
-        if (!outputCapture.append('stderr', data)) {
+        lastOutputAt = Date.now()
+        pendingJob?.appendOutput('stderr', data)
+        if (!captureFinalized && !outputCapture.append('stderr', data)) {
           stderrStream.pause()
           outputCapture.onDrain(() => stderrStream.resume())
         }
-        if (outputCapture.isLimitExceeded() && !outputLimitExceeded) {
+        if (!outputLimitExceeded && outputCapture.isLimitExceeded()) {
           outputLimitExceeded = true
-          killProcessTree(child, 'SIGTERM')
-          forceKillHandle = setTimeout(() => killProcessTree(child, 'SIGKILL'), 3_000)
+          void killProcessTreeAsync(child, 'SIGTERM')
+          scheduleForceKill()
         }
         const remaining = maxOutputBytes - Buffer.byteLength(stderr)
         if (remaining > 0) stderr += data.subarray(0, remaining).toString()
@@ -303,27 +463,29 @@ export async function executeUserExecCommand(params: UserExecParams): Promise<Us
         log.error('skills:user-exec spawn error', error)
         resolveOnce({ success: false, stdout, stderr: stderr || error.message, exitCode: null })
       })
+      child.on('exit', (code, signal) => {
+        exitCode = code
+        exitSignal = signal
+        pendingJob?.markExited(code)
+        if (settled) return
+        // 阶段 1：正常命令 'close' 会在 'exit' 之后立刻到；但如果后代进程继承了
+        // stdout/stderr 管道（Start-Process / start 起的后台服务等），管道就永不 EOF，
+        // 'close' 永不触发 —— 于是这里给一段宽限，到点主动放掉管道并落定。
+        exitGraceHandle = setTimeout(() => {
+          if (settled) return
+          descendantsDetected = true
+          stdoutStream.destroy()
+          stderrStream.destroy()
+          resolveOnce(buildResult())
+        }, EXIT_PIPE_GRACE_MS)
+      })
       child.on('close', (code, signal) => {
         if (forceKillHandle) clearTimeout(forceKillHandle)
-        resolveOnce(
-          cancelled
-            ? { success: false, stdout, stderr, exitCode: 130, cancelled: true }
-            : outputLimitExceeded
-              ? {
-                  success: false,
-                  stdout,
-                  stderr: `${stderr}${stderr ? '\n' : ''}[Command terminated: output exceeded the 10MB capture limit]`,
-                  exitCode: 1,
-                }
-              : timedOut || signal === 'SIGTERM'
-                ? {
-                    success: false,
-                    stdout,
-                    stderr: stderr || `Command timed out (${timeoutMs / 1000}s)`,
-                    exitCode: null,
-                  }
-                : { success: code === 0, stdout, stderr, exitCode: code }
-        )
+        if (exitGraceHandle) clearTimeout(exitGraceHandle)
+        exitCode = code
+        exitSignal = signal
+        pendingJob?.markExited(code)
+        resolveOnce(buildResult())
       })
     })
   } catch (error) {

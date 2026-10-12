@@ -20,6 +20,7 @@ import { buildFilesystemTools } from '@/packages/model-calls/toolsets/filesystem
 import { getToolSet as getKBToolSet } from '@/packages/model-calls/toolsets/knowledge-base'
 import { asRecord, numberField, stringField, toTextModelOutput } from '@/packages/model-calls/toolsets/model-output'
 import { buildRunCommandTool } from '@/packages/model-calls/toolsets/run-command'
+import { buildCommandJobTool } from '@/packages/model-calls/toolsets/run-command'
 import { remapPhantomHomePath } from '@/packages/model-calls/toolsets/sandbox-paths'
 import { getToolSet as getSessionAttachmentRagToolSet } from '@/packages/model-calls/toolsets/session-attachment-rag'
 import { buildViewImageToolSet, isViewImageAvailable } from '@/packages/model-calls/toolsets/view-image'
@@ -501,6 +502,13 @@ When you create a Git commit that includes code changes, append this exact trail
       .slice(-3)
       .map((message) => getMessageText(message, true, false).slice(0, 500))
     const userContext = recentUserMsgs.join('\n---\n')
+    const commandJob = buildCommandJobTool({
+      sessionId: commandExecution.sessionId,
+      onUsed: options.onAgentModeActivated,
+    })
+    tools.command_job = commandJob.tool
+    instructions += commandJob.description
+
     const runCommand = buildRunCommandTool({
       sessionId: commandExecution.sessionId,
       platform: commandPlatform,

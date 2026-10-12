@@ -50,6 +50,13 @@ interface RunCommandResult {
   cancelled?: boolean
   outputFile?: string
   ignoredHostRetryFields?: boolean
+  /** 阶段 2：命令静默过久，被交给后台 job，工具调用提前落定。 */
+  running?: boolean
+  jobId?: string
+  jobReason?: 'idle' | 'timeout'
+  idleMs?: number
+  /** 阶段 1：命令本身退出了，但后代进程仍跑着并占着输出管道。 */
+  detachedDescendants?: boolean
 }
 
 function formatRunCommandOutput(output: unknown): string {
@@ -62,6 +69,14 @@ function formatRunCommandOutput(output: unknown): string {
   const exitCode = numberField(record, 'exitCode')
   const sandboxDenied = record?.sandboxDenied === true
   const ignoredHostRetryFields = record?.ignoredHostRetryFields === true
+  const running = record?.running === true
+  const jobId = stringField(record, 'jobId')
+  const jobReason = stringField(record, 'jobReason')
+  const idleMs = numberField(record, 'idleMs')
+  const detachedDescendants = record?.detachedDescendants === true
+  if (running && jobId) {
+    return formatHandedOffJobOutput({ jobId, jobReason, idleMs, cwd, stdout, stderr, outputFile })
+  }
   const sections = [`Exit code: ${exitCode ?? 'unknown'}`]
   if (cwd) sections.push(`Working directory: ${cwd}`)
   if (stdout) sections.push(`Stdout:\n${stdout}`)
@@ -79,6 +94,11 @@ function formatRunCommandOutput(output: unknown): string {
   if (retryAvailable) {
     sections.push(
       'The command failed in the sandbox. If host access is genuinely required, retry this exact command, workdir, and shell once with sandbox_permissions="danger-full-access" and a one-sentence justification. The harness binds the matching one-time failure internally; do not invent or pass a retry reference. Do not escalate ordinary command errors.'
+    )
+  }
+  if (detachedDescendants) {
+    sections.push(
+      'Note: the command itself exited, but descendant processes it started are still running and holding its output streams open, so its output was force-closed. Those descendants were NOT killed and are not tracked; if they need to stop, find and stop them explicitly.'
     )
   }
   return sections.join('\n\n')
@@ -141,6 +161,8 @@ Use \`run_command\` for project commands, shell commands, and Node.js scripts. T
 - Do not append \`| head\` or \`| tail\` merely to limit output. Output is already bounded; preserve the original command for exact retry matching.
 - A sandbox-denied marker is a diagnostic signal, not the only reason a host retry may be appropriate.
 - Prefer writing reusable Node.js code to a file, then run it with \`node path/to/script.mjs\`.
+- A command that stays silent for too long is NOT killed: this tool stops waiting, hands it to a background job, and returns \`running\` with a \`jobId\`. Take it over with the \`command_job\` tool (wait / status / kill) instead of starting a second copy.
+- \`timeout\` only bounds how long this tool call waits before handing a silent command off; it does not stop the command. Use \`command_job\` action="kill" to actually stop one.
 `
 
   const tool: ToolSet[string] = {
@@ -159,7 +181,10 @@ Use \`run_command\` for project commands, shell commands, and Node.js scripts. T
             'Command working directory. Defaults to the first user-granted workdir, then the sandbox directory.',
         },
         shell: { type: 'string', enum: [shell], description: `Must be ${shell} on this platform.` },
-        timeout: { type: 'number', description: `Timeout in milliseconds, capped at ${MAX_TIMEOUT_MS}.` },
+        timeout: {
+          type: 'number',
+          description: `How long this call waits in milliseconds, capped at ${MAX_TIMEOUT_MS}. When it expires the command is not killed: if it has been silent it becomes a background job (see the command_job tool).`,
+        },
         sandbox_permissions: {
           type: 'string',
           enum: ['danger-full-access'],
@@ -334,6 +359,7 @@ Use \`run_command\` for project commands, shell commands, and Node.js scripts. T
           void skillsController.cancelUserExec({ sessionId: context.sessionId, toolCallId: toolOptions.toolCallId })
         }
         toolOptions.abortSignal?.addEventListener('abort', cancel, { once: true })
+        let handedOffToJob = false
         try {
           const result = await skillsController.userExec(input.command, {
             ...(cwd ? { cwd } : {}),
@@ -345,6 +371,7 @@ Use \`run_command\` for project commands, shell commands, and Node.js scripts. T
             ...(baseCwd ? { baseCwd } : {}),
             injectBundledNode: true,
           })
+          if (result.running) handedOffToJob = true
           const output = compactCommandOutput(result.stdout, result.stderr, result.outputFile)
           context.onUsed?.()
           return {
@@ -357,9 +384,16 @@ Use \`run_command\` for project commands, shell commands, and Node.js scripts. T
             ...(output.outputFile ? { outputFile: output.outputFile } : {}),
             ...(result.cancelled ? { cancelled: true } : {}),
             ...(ignoredHostRetryFields ? { ignoredHostRetryFields: true } : {}),
+            ...(result.running ? { running: true } : {}),
+            ...(result.jobId ? { jobId: result.jobId } : {}),
+            ...(result.jobReason ? { jobReason: result.jobReason } : {}),
+            ...(typeof result.idleMs === 'number' ? { idleMs: result.idleMs } : {}),
+            ...(result.detachedDescendants ? { detachedDescendants: true } : {}),
           }
         } finally {
-          toolOptions.abortSignal?.removeEventListener('abort', cancel)
+          // 交给后台 job 之后这次工具调用已经结束，但 job 还活着：保留 abort 监听，
+          // 用户之后停止生成时仍然要能把它杀掉。
+          if (!handedOffToJob) toolOptions.abortSignal?.removeEventListener('abort', cancel)
         }
       })
 
@@ -375,4 +409,190 @@ Use \`run_command\` for project commands, shell commands, and Node.js scripts. T
   }
 
   return { tool, description }
+}
+
+const DEFAULT_JOB_WAIT_MS = 60_000
+const MAX_JOB_WAIT_MS = 120_000
+
+export interface CommandJobContext {
+  sessionId: string
+  onUsed?: () => void
+}
+
+export function formatCommandJobOutput(output: unknown): string {
+  const record = asRecord(output)
+  const action = stringField(record, 'action') ?? 'status'
+  const jobId = stringField(record, 'jobId')
+  if (action === 'list') {
+    const rawJobs = Array.isArray(record?.jobs) ? record.jobs : []
+    if (rawJobs.length === 0) return 'No background command jobs are known for this session.'
+    const lines = rawJobs.map((raw) => {
+      const job = asRecord(raw)
+      const id = stringField(job, 'jobId') ?? '(unknown)'
+      const state = stringField(job, 'state') ?? 'unknown'
+      const idle = numberField(job, 'idleMs')
+      const command = stringField(job, 'command') ?? ''
+      return `- ${id} [${state}${typeof idle === 'number' ? `, silence ${idle} ms` : ''}] :: ${command}`
+    })
+    return ['Background command jobs:', ...lines].join('\n')
+  }
+  if (!jobId) return 'command_job needs a job_id for status, wait and kill.'
+  if (record?.found === false) {
+    return `Job ${jobId} is not known any more (it exited and was cleaned up, or the id is wrong). Use action="list" to see live jobs.`
+  }
+  const state = stringField(record, 'state') ?? 'unknown'
+  const exitCode = numberField(record, 'exitCode')
+  const idleMs = numberField(record, 'idleMs')
+  const reason = stringField(record, 'reason')
+  const recentOutput = stringField(record, 'recentOutput') ?? ''
+  const sections: string[] = [
+    `Job ${jobId}: ${state}${typeof exitCode === 'number' ? ` (exit code ${exitCode})` : ''}`,
+  ]
+  if (action === 'wait') {
+    sections.push(
+      reason === 'output'
+        ? 'Returned because the job wrote new output (it is still running).'
+        : reason === 'exited'
+          ? 'Returned because the job exited.'
+          : 'Returned because the wait elapsed; the job may still be running.'
+    )
+  }
+  if (typeof idleMs === 'number') sections.push(`Silence: ${idleMs} ms`)
+  if (recentOutput) sections.push(`Recent output (stdout+stderr):\n${recentOutput}`)
+  else sections.push('(no output captured yet)')
+  if (state === 'running') {
+    sections.push('The job is still running: use action="wait" to keep watching, or action="kill" to stop it.')
+  }
+  return sections.join('\n\n')
+}
+
+const commandJobDescription = `
+## Background command jobs
+When \`run_command\` goes quiet for too long it is not killed: the command becomes a background job and the tool call returns \`running\` with a \`jobId\`. Use \`command_job\` to take that job over.
+- \`action="wait"\` blocks until the job writes new output or exits, then returns — use it while the command is merely slow, and prefer small waits so you stay responsive.
+- \`action="status"\` reports state, silence so far and the recent output without blocking.
+- \`action="kill"\` stops the job and its descendants when the output shows it is genuinely stuck.
+- \`action="list"\` lists the jobs still known for this session, in case you lost a job id.
+- Never start a second copy of a command whose job is still running.
+`
+
+export function buildCommandJobTool(context: CommandJobContext): { tool: ToolSet[string]; description: string } {
+  const tool: ToolSet[string] = {
+    description:
+      'Inspect, keep waiting for, or stop a background command job created when run_command handed a silent command off.',
+    inputSchema: jsonSchema({
+      type: 'object',
+      properties: {
+        job_id: {
+          type: 'string',
+          description: 'The jobId returned by run_command. Required for status, wait and kill.',
+        },
+        action: {
+          type: 'string',
+          enum: ['status', 'wait', 'kill', 'list'],
+          description: 'What to do with the job. Defaults to "status".',
+        },
+        timeout_ms: {
+          type: 'number',
+          description: `How long action="wait" may block before returning, capped at ${MAX_JOB_WAIT_MS}. Defaults to ${DEFAULT_JOB_WAIT_MS}.`,
+        },
+      },
+      additionalProperties: false,
+    }),
+    execute: async (rawInput) => {
+      const input = rawInput as { job_id?: string; action?: string; timeout_ms?: number }
+      const action = input.action ?? 'status'
+      if (action !== 'status' && action !== 'wait' && action !== 'kill' && action !== 'list') {
+        throw new Error('action must be one of: status, wait, kill, list')
+      }
+      context.onUsed?.()
+      if (action === 'list') {
+        const jobs = await skillsController.commandJobList(context.sessionId)
+        return {
+          action,
+          jobs: jobs.map((job) => ({
+            jobId: job.id,
+            state: job.state,
+            command: job.command,
+            idleMs: job.idleMs,
+          })),
+        }
+      }
+      const jobId = input.job_id?.trim()
+      if (!jobId) throw new Error('job_id is required for status, wait and kill')
+      if (action === 'status') {
+        const snapshot = await skillsController.commandJobStatus(jobId)
+        if (!snapshot) return { action, jobId, found: false }
+        return {
+          action,
+          jobId,
+          found: true,
+          state: snapshot.state,
+          exitCode: snapshot.exitCode,
+          pid: snapshot.pid,
+          idleMs: snapshot.idleMs,
+          recentOutput: snapshot.recentOutput,
+        }
+      }
+      if (action === 'wait') {
+        let timeoutMs = DEFAULT_JOB_WAIT_MS
+        if (input.timeout_ms !== undefined) {
+          if (!Number.isFinite(input.timeout_ms) || input.timeout_ms < 0) {
+            throw new Error('timeout_ms must be zero or a positive number')
+          }
+          timeoutMs = Math.min(Math.floor(input.timeout_ms), MAX_JOB_WAIT_MS)
+        }
+        const outcome = await skillsController.commandJobWait(jobId, timeoutMs)
+        if (!outcome) return { action, jobId, found: false }
+        return {
+          action,
+          jobId,
+          found: true,
+          reason: outcome.reason,
+          state: outcome.snapshot.state,
+          exitCode: outcome.snapshot.exitCode,
+          idleMs: outcome.snapshot.idleMs,
+          recentOutput: outcome.snapshot.recentOutput,
+        }
+      }
+      const result = await skillsController.commandJobKill(jobId)
+      return {
+        action,
+        jobId,
+        found: true,
+        killed: result.killed,
+        state: result.snapshot?.state,
+        exitCode: result.snapshot?.exitCode ?? null,
+      }
+    },
+    toModelOutput: toTextModelOutput(formatCommandJobOutput),
+  }
+  return { tool, description: commandJobDescription }
+}
+
+function formatHandedOffJobOutput(job: {
+  jobId: string
+  jobReason?: string
+  idleMs?: number | null
+  cwd?: string
+  stdout: string
+  stderr: string
+  outputFile?: string
+}): string {
+  const reasonText =
+    job.jobReason === 'idle'
+      ? 'it stopped producing output'
+      : job.jobReason === 'timeout'
+        ? 'it exceeded the wait budget'
+        : 'it keeps running'
+  const sections = [`Status: still running in the background as job ${job.jobId} (${reasonText}).`]
+  if (job.cwd) sections.push(`Working directory: ${job.cwd}`)
+  if (typeof job.idleMs === 'number') sections.push(`Silence before hand-off: ${job.idleMs} ms`)
+  sections.push(job.stdout ? `Recent output (stdout+stderr so far):\n${job.stdout}` : '(no output so far)')
+  if (job.stderr) sections.push(`Stderr:\n${job.stderr}`)
+  if (job.outputFile) sections.push(`Output capture (up to the hand-off): ${job.outputFile}`)
+  sections.push(
+    `The command was NOT killed and is still running. Decide what to do, then call the \`command_job\` tool with job_id="${job.jobId}":\n- action="wait" (optional timeout_ms, default 60000) returns as soon as it writes new output or exits — use it when the command is merely slow and you want to keep waiting.\n- action="status" shows its state and recent output without blocking.\n- action="kill" stops it and its descendants when the output shows it is genuinely stuck.\nDo not start a second copy of the same command while this job is alive.`
+  )
+  return sections.join('\n\n')
 }

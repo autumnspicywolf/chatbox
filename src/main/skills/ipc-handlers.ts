@@ -25,6 +25,7 @@ import {
   resolveUserExecCwd,
   type UserExecParams,
 } from './user-exec-runner'
+import { getCommandJob, listCommandJobs } from './command-jobs'
 import { isValidSkillName } from './validation'
 
 const log = getLogger('skills:ipc-handlers')
@@ -357,6 +358,27 @@ export function registerSkillsHandlers() {
       params: { sessionId: string; retryOf?: string; command: string; cwd: string; shell: 'bash' | 'powershell' }
     ) => resolveFailedCommandRetry(params)
   )
+  // 静默太久的命令会被交给后台 job（见 command-jobs.ts），模型用这几个通道接管它。
+  ipcMain.handle('skills:command-job-status', (_event, params: { jobId: string }) => {
+    const job = getCommandJob(params.jobId)
+    return job ? job.snapshot() : null
+  })
+  ipcMain.handle('skills:command-job-list', (_event, params: { sessionId?: string } | undefined) =>
+    listCommandJobs(params).map((job) => job.snapshot())
+  )
+  ipcMain.handle('skills:command-job-wait', async (_event, params: { jobId: string; timeoutMs?: number }) => {
+    const job = getCommandJob(params.jobId)
+    if (!job) return null
+    const timeoutMs = Math.min(Math.max(Math.floor(params.timeoutMs ?? 60_000), 0), 120_000)
+    return await job.wait(timeoutMs)
+  })
+  ipcMain.handle('skills:command-job-kill', async (_event, params: { jobId: string }) => {
+    const job = getCommandJob(params.jobId)
+    if (!job) return { killed: false, jobId: params.jobId }
+    const killed = await job.kill('SIGTERM')
+    return { killed, jobId: params.jobId, snapshot: job.snapshot() }
+  })
+
   ipcMain.handle('skills:user-exec-cancel', (_event, params: Pick<UserExecParams, 'sessionId' | 'toolCallId'>) =>
     cancelUserExecCommand(params)
   )
